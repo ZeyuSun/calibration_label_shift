@@ -8,7 +8,7 @@ from sklearn.linear_model import LinearRegression
 
 from calibration import OracleCalibrator, BinnedOracleCalibrator, HistogramCalibrator
 from utils import expectation, sigmoid, logit, dlogit
-from bounds import CAL, SHA, RISK, der_RISK
+from bounds import CAL, SHA, RISK
 
 
 class CalibrationSimulationBase:
@@ -18,15 +18,16 @@ class CalibrationSimulationBase:
     - py_given_z
     - pz
     """
+
     def pz(self, z):  # p(z)
         raise NotImplementedError
-    
+
     def py_given_z(self, z):  # P[Y=1 | Z=z]
         raise NotImplementedError
-    
+
     def generate_data(self, n):  # n: sample size
         raise NotImplementedError
-    
+
     def run_single(self, n, B, i):
         np.random.seed(i)
         z, y = self.generate_data(n)
@@ -35,7 +36,7 @@ class CalibrationSimulationBase:
         metrics = evaluate(calibrator, self.py_given_z, self.pz)
         metrics.update({'n': n, 'B': B, 'i': i})
         return metrics
-    
+
     def run(self, n_list=None, B_list=None, i_list=None):
         if n_list is None:
             n_list = np.logspace(2, 7, 7, dtype=int)
@@ -49,11 +50,12 @@ class CalibrationSimulationBase:
             results = p.starmap(self.run_single, prod)
         df = pd.DataFrame(results)
         return df
-    
+
     def plot(self, df_raw):
         n_list = np.unique(df_raw['n'])
         B_list = np.unique(df_raw['B'])
         delta = 0.1  # bounds fail with probability at most delta
+        self.K = getattr(self, 'K', None)  # smoothness constant
         df = df_raw.groupby(['n', 'B']).mean().reset_index()
         df_lower = df_raw.groupby(['n', 'B']).quantile(q=delta)
         df_upper = df_raw.groupby(['n', 'B']).quantile(q=1-delta)
@@ -67,10 +69,10 @@ class CalibrationSimulationBase:
             subdf = df.loc[(df['n'] == n) & (df['B'] <= n / 2)]
             _B_list = subdf['B'].to_numpy()
             B_grid = np.linspace(_B_list[0], _B_list[-1], 100)
-            
+
             reg = LinearRegression().fit(np.log(_B_list).reshape(-1, 1), np.log(subdf['cal']))
             slopes_weights.append([reg.coef_[0], len(_B_list)])
-            
+
             plt.plot(_B_list, subdf['cal'], c=f'C{i}', label=f'n={n:.1e}')
             plt.fill_between(_B_list, subdf['cal_lower'], subdf['cal_upper'], color=f'C{i}', alpha=0.2)
             plt.plot(B_grid, CAL(B_grid, n, delta), c=f'C{i}', ls='--')
@@ -87,10 +89,10 @@ class CalibrationSimulationBase:
             subdf = df.loc[(df['B'] == B) & (df['n'] >= 2 * B)]
             _n_list = subdf['n'].to_numpy()
             n_grid = np.linspace(_n_list[0], _n_list[-1], 100)
-            
+
             reg = LinearRegression().fit(np.log(_n_list).reshape(-1, 1), np.log(subdf['cal']))
             slopes_weights.append([reg.coef_[0], len(_n_list)])
-            
+
             plt.plot(_n_list, subdf['cal'], c=f'C{i}', label=f'B={B}')
             plt.fill_between(_n_list, subdf['cal_lower'], subdf['cal_upper'], color=f'C{i}', alpha=0.2)
             plt.plot(n_grid, CAL(B, n_grid, delta), c=f'C{i}', ls='--')
@@ -99,7 +101,7 @@ class CalibrationSimulationBase:
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('n'); plt.ylabel('Calibration Risk'); plt.legend(framealpha=0.3)
         plt.savefig('cal_vs_n.pdf', bbox_inches='tight')
-        
+
         # sha vs. B (all n)
         plt.figure(figsize=(3, 3))
         for i, n in enumerate(n_list[::2]):
@@ -111,7 +113,7 @@ class CalibrationSimulationBase:
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('B'); plt.ylabel('Sharpness Risk'); plt.legend(framealpha=0.3)
         plt.savefig('sha_vs_B_all_n.pdf', bbox_inches='tight')
-        
+
         # sha vs. B
         plt.figure(figsize=(3, 3))
         n = n_list[-1]
@@ -126,7 +128,7 @@ class CalibrationSimulationBase:
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('B'); plt.ylabel('Sharpness Risk'); plt.legend(framealpha=0.3)
         plt.savefig('sha_vs_B.pdf', bbox_inches='tight')
-        
+
         # risk vs. B
         plt.figure(figsize=(3, 3))
         for i, n in enumerate(n_list[::2]):
@@ -216,7 +218,7 @@ class Simulation1(CalibrationSimulationBase):
         likelihood_0 = scipy.stats.norm.pdf(x, loc=-self.mu, scale=1)
         likelihood_1 = scipy.stats.norm.pdf(x, loc=self.mu, scale=1)
         return self.p * likelihood_1 + (1 - self.p) * likelihood_0
-    
+
     def pz(self, z):
         """
         z = f(x)
@@ -227,12 +229,12 @@ class Simulation1(CalibrationSimulationBase):
         px = self.px(x)
         jac = self.f_inv_der(z)
         return px * jac
-    
+
     def py_given_z(self, z):
         x = self.f_inv(z)
         logodds = 2 * self.mu * x + np.log(self.p / (1 - self.p))
         return sigmoid(logodds)
-    
+
     def generate_data(self, n):
         y = np.random.binomial(1, self.p, size=n)
         n1 = np.sum(y)

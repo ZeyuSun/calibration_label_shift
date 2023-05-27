@@ -3,7 +3,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
-from utils import expectation, sigmoid, logit, interpolate_nan
+from utils import expectation, logit, interpolate_nan
 
 
 class BaseCalibrator:
@@ -16,7 +16,7 @@ class BaseCalibrator:
     def __call__(self, z):
         return self.predict(z)
 
-    def plot(self, ax=None, set_layout=None, *args, **kwargs):
+    def plot(self, *args, ax=None, set_layout=None, **kwargs):
         if ax is None:
             if plt.get_fignums():
                 ax = plt.gca()
@@ -24,7 +24,7 @@ class BaseCalibrator:
                 _, ax = plt.subplots(figsize=(3, 3))
 
         if hasattr(self, 'bins'):
-            ax.stairs(self.bin_mean, edges=self.bins, baseline=None, *args, **kwargs)
+            ax.stairs(self.bin_mean, *args, edges=self.bins, baseline=None, **kwargs)
             ax.set_ylim(bottom=-0.05)
         elif hasattr(self, 'z_'):
             ax.plot(self.z_, self.y_, *args, **kwargs)
@@ -47,7 +47,7 @@ class OracleCalibrator(BaseCalibrator):
 
     def predict(self, z):
         return self.py_given_z(z)
-    
+
 
 class BinnedOracleCalibrator(BaseCalibrator):
     def __init__(self, bins, py_given_z, pz):
@@ -66,6 +66,8 @@ class HistogramCalibrator(BaseCalibrator):
     def __init__(self, n_bins=10, strategy='uniform'):
         self.n_bins = n_bins
         self.strategy = strategy
+        self.bins = None  # edges
+        self.bin_mean = None  # heights
 
     def fit(self, z, y):
         if self.strategy == 'uniform':
@@ -88,11 +90,13 @@ class HistogramCalibrator(BaseCalibrator):
     def predict(self, z):
         binids = np.digitize(z, self.bins) - 1
         return self.bin_mean[binids]
-    
+
 
 class IsotonicCalibrator(BaseCalibrator):
     def __init__(self):
         self.iso = IsotonicRegression(out_of_bounds='clip')
+        self.z_ = None  # thresholds
+        self.y_ = None  # predictions
 
     def fit(self, z, y):
         self.iso.fit(z, y)
@@ -103,7 +107,7 @@ class IsotonicCalibrator(BaseCalibrator):
     def predict(self, z):
         # NOTE: linear interpolation
         return self.iso.predict(z)
-    
+
 
 class PlattCalibrator(BaseCalibrator):
     def __init__(self):

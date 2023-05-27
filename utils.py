@@ -2,7 +2,9 @@ import warnings
 import numpy as np
 from scipy.integrate import quad
 
+
 eps = 1e-16
+
 
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
