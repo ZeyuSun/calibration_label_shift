@@ -4,8 +4,8 @@ This repository is the official implementation of [Minimum-Risk Recalibration of
 ## Results
 
 ### Calibration with Uniform-Mass Binning
-* Left: The recalibration risk for different configurations of sample size $n$ and number of bins $B$.
-* Right: The optimal bin number scales on the order of $O(n^{1/3})$.
+* The recalibration risk for different configurations of sample size $n$ and number of bins $B$ for Uniform-Mass Binning (UMB).
+* The optimal bin number scales on the order of $O(n^{1/3})$.
 
 <img src="assets/opt_B_risk_surface.png" alt="Risk surface" width="30%"/>
 <img src="assets/opt_B_log.png" alt="Optimal number of bins" width="25%"/>
@@ -23,9 +23,17 @@ Calibration curves and metrics for 4 methods: `Source` $\hat{h}_P$, `Target` $\h
 | label shift | 0.028+/-0.005     | 0               | 0.028+/-0.005   | 0.029+/-0.005   |
 | composite   | 0.00018+/-0.00029 | 0.0024+/-0.0007 | 0.0026+/-0.0006 | 0.0039+/-0.0006 |
 
-## Code
-* Jupyter notebooks: `Calibration.ipynb` and `Label Shift.ipynb`
-* `calibration.py` contains implementations of different calibrators.
+## Quick start
+1. `pip install requirements.txt`
+2. Run Jupyter notebooks: `Calibration.ipynb` and `Label Shift.ipynb`
+
+Other python files:
+* `simulation_calibration.py`: simulation of UMB on a Gaussian mixture with sigmoid classifier.
+* `simulation_label_shift.py`: code for simulate calibration on a Gaussian mixture under label shift.
+* `calibration.py`: implementations for different calibrators.
+* `utils.py`: utility functions.
+* `bounds.py`: high probability bounds for risks.
+* `test.py`: unit tests.
 
 ## Cite
 ```plain

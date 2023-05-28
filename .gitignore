@@ -1,5 +1,6 @@
 *.pdf
 .vscode/
+.virtual_documents/
 archive/
 
 # Byte-compiled / optimized / DLL files
