@@ -202,7 +202,7 @@ class LabelShiftSimulation:
             else:
                 kwargs = {'lw': 2}
             calibrators[key].plot(label=symbol, **kwargs)
-        plt.savefig('simulation_label_shift.pdf', bbox_inches='tight')
+        plt.savefig('sim_rd.pdf', bbox_inches='tight')
 
         # density p_Q(z)
         plt.figure(figsize=(3.5, 3.5))
@@ -212,3 +212,4 @@ class LabelShiftSimulation:
         plt.legend()
         plt.xlabel('Predicted Probability $z$')
         plt.ylabel('Density')
+        plt.savefig('sim_z_marginal.pdf', bbox_inches='tight')

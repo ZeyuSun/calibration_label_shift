@@ -33,7 +33,7 @@ class BaseCalibrator:
             ax.plot(zz, self.predict(zz), *args, **kwargs)
 
         if set_layout:
-            ax.plot([0, 1], [0, 1], 'k--', alpha=0.5)
+            ax.plot([0, 1], [0, 1], 'k--', alpha=0.3)
             plt.xlabel('Predicted Probability')
             plt.ylabel('Empirical Frequency')
             ax.set_aspect('equal', 'box')  # plt.axis('scaled'): ylim bottom change back to 0
