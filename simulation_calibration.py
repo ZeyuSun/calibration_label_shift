@@ -248,7 +248,12 @@ class Simulation1(CalibrationSimulationBase):
 def evaluate(calibrator, py_given_z, pz):
     """Evaluate population metrics of a calibrator."""
     oracle = OracleCalibrator(py_given_z)
-    binned_oracle = BinnedOracleCalibrator(calibrator.bins, py_given_z, pz)
+    if hasattr(calibrator, 'bins'):
+        binned_oracle = BinnedOracleCalibrator(calibrator.bins, py_given_z, pz)
+    elif hasattr(calibrator, 'z_'):
+        binned_oracle = BinnedOracleCalibrator(calibrator.z_, py_given_z, pz)
+    else:  # no binning, no sharpness loss
+        binned_oracle = oracle
     results = {
         'cal': expectation(lambda z: (calibrator(z) - binned_oracle(z)) ** 2, pz),  # calibration risk; reliability
         'sha': expectation(lambda z: (binned_oracle(z) - oracle(z)) ** 2, pz),  # sharpness risk; grouping risk

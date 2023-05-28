@@ -21,7 +21,7 @@ class BaseCalibrator:
             if plt.get_fignums():
                 ax = plt.gca()
             else:
-                _, ax = plt.subplots(figsize=(3, 3))
+                _, ax = plt.subplots(figsize=(3.5, 3.5))
 
         if hasattr(self, 'bins'):
             ax.stairs(self.bin_mean, *args, edges=self.bins, baseline=None, **kwargs)
@@ -33,12 +33,26 @@ class BaseCalibrator:
             ax.plot(zz, self.predict(zz), *args, **kwargs)
 
         if set_layout:
+            ax.plot([0, 1], [0, 1], 'k--', alpha=0.5)
             plt.xlabel('Predicted Probability')
             plt.ylabel('Empirical Frequency')
             ax.set_aspect('equal', 'box')  # plt.axis('scaled'): ylim bottom change back to 0
             plt.grid()
-            plt.legend()
+            plt.legend(framealpha=0.4)
         return ax
+
+
+class CompositeCalibrator(BaseCalibrator):
+    def __init__(self, calibrators):
+        self.calibrators = calibrators
+        if len(calibrators) == 2 and isinstance(calibrators[0], HistogramCalibrator):
+            self.bins = self.calibrators[0].bins
+            self.bin_mean = self.calibrators[1](self.calibrators[0].bin_mean)
+
+    def predict(self, z):
+        for calibrator in self.calibrators:
+            z = calibrator.predict(z)
+        return z
 
 
 class OracleCalibrator(BaseCalibrator):
@@ -76,7 +90,7 @@ class HistogramCalibrator(BaseCalibrator):
             bins = np.quantile(z, np.linspace(0, 1, self.n_bins + 1))
         else:
             raise ValueError('strategy should be either "uniform" or "quantile".')
-        bins[0], bins[-1] = 0, 1 + 1e-16
+        bins[0], bins[-1] = 0, 1 + 1e-8  # 1e-16 doesn't work: 1 + 1e-16 == 1
         binids = np.digitize(z, bins) - 1
         bin_total = np.bincount(binids, minlength=self.n_bins)
         bin_true = np.bincount(binids, weights=y, minlength=self.n_bins)
@@ -121,3 +135,14 @@ class PlattCalibrator(BaseCalibrator):
     def predict(self, z):
         x = logit(z).reshape(-1, 1)
         return self.reg.predict_proba(x)[:, 1]
+
+
+class LabelShiftCalibrator(BaseCalibrator):
+    def __init__(self, pi_source, pi_target):
+        w1 = pi_target / pi_source
+        w0 = (1 - pi_target) / (1 - pi_source)
+        self.r = w0 / w1  # odds ratio
+
+    def predict(self, z):
+        z = np.maximum(z, 1e-16)
+        return 1 / (1 + self.r * (1 - z) / z)
