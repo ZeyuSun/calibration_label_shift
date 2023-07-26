@@ -245,6 +245,59 @@ class Simulation1(CalibrationSimulationBase):
         return z, y
 
 
+class Simulation2(CalibrationSimulationBase):
+    """Simulation 2:
+    Z ~ Uniform[0, 1]
+    Y | Z ~ Bernoulli, p(y=1|z) = 1 / (1 + 1 / (e^c z^a / (1-z)^b))
+
+    Similar to Beta calibration [Kull'17](https://doi.org/10.1214/17-EJS1338SI),
+    but we set Z ~ Uniform instead of Beta mixture for simplicity.
+    """
+    # def __init__(self, a=0.2, b=5, m=0.5):
+    def __init__(self, a=1, b=1, m=0.25):
+        self.a = a
+        self.b = b
+        self.c = b * np.log(1 - m) - a * np.log(m)
+        self.K = self.get_K()
+
+    def pz(self, z):
+        return 1
+
+    def py_given_z(self, z):
+        # logodds = self.c +  self.a * np.log(z) - self.b * np.log(1 - z)
+        # return sigmoid(logodds)
+        return 1 / (1 + 1 / (np.exp(self.c) * z ** self.a / (1 - z) ** self.b))
+
+    def generate_data(self, n):
+        z = np.random.uniform(size=n)
+        y = np.random.binomial(1, self.py_given_z(z))
+        return z, y
+
+    def get_K(self):
+        mu = self.py_given_z
+
+        def dmu(z):
+            s = mu(z)
+            t1 = self.a / z + self.b / (1 - z)
+            return s * (1 - s) * t1
+
+        def ddmu(z):
+            s = mu(z)
+            t1 = self.a / z + self.b / (1 - z)
+            t2 = - self.a / z ** 2 + self.b / (1 - z) ** 2
+            return (1 - 2 * s) * t1 ** 2 + t2
+
+        def neg(f):
+            def neg_f(z):
+                return -f(z)
+            return neg_f
+
+        res = scipy.optimize.minimize_scalar(neg(dmu), bounds=(0, 1), method='bounded')
+        # x0 = 0.5
+        # res = scipy.optimize.minimize(neg(dmu), x0, jac=neg(ddmu)) # not bounded, ddmu can be small
+        return dmu(res.x)
+
+
 def evaluate(calibrator, py_given_z, pz):
     """Evaluate population metrics of a calibrator."""
     oracle = OracleCalibrator(py_given_z)

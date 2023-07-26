@@ -146,3 +146,18 @@ class LabelShiftCalibrator(BaseCalibrator):
     def predict(self, z):
         z = np.maximum(z, 1e-16)
         return 1 / (1 + self.r * (1 - z) / z)
+
+
+class ScalingBinningCalibrator(BaseCalibrator):
+    def __init__(self, n_bins=10):
+        self.platt = PlattCalibrator()
+        self.hist = HistogramCalibrator(n_bins=n_bins, strategy='quantile')
+
+    def fit(self, z, y):
+        gz = self.platt.fit(z, y).predict(z)  # g(z)
+        self.hist.fit(gz, gz)  # discretize g(z)
+        return self
+
+    def predict(self, z):
+        gz = self.platt.predict(z)
+        return self.hist.predict(gz)
