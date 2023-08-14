@@ -1,12 +1,14 @@
 import itertools
-from multiprocessing import Pool
+# from multiprocessing import Pool
+from multiprocess import Pool
 import numpy as np
 import pandas as pd
 import scipy
 from matplotlib import colors, pyplot as plt
 from sklearn.linear_model import LinearRegression
+from tqdm.auto import tqdm
 
-from calibration import OracleCalibrator, BinnedOracleCalibrator, HistogramCalibrator
+from calibration import OracleCalibrator, BinnedOracleCalibrator, HistogramCalibrator, PlattCalibrator, ScalingBinningCalibrator
 from utils import expectation, sigmoid, logit, dlogit
 from bounds import CAL, SHA, RISK
 
@@ -198,6 +200,86 @@ class CalibrationSimulationBase:
         plt.savefig('opt_B_risk_surface.pdf', bbox_inches='tight')
 
 
+    def run_calibrators(self, n=1000, B=None, seed=None, plot=True):
+        np.random.seed(seed)
+        if B is None:
+            B = round(1 * (n ** (1/3)))
+        z, y = self.generate_data(n)
+
+        platt_binning = ScalingBinningCalibrator(n_bins=B).fit(z, y)
+        platt = PlattCalibrator().fit(z, y)
+        calibrators = {
+            'Optimal': OracleCalibrator(self.py_given_z),
+            'UMB': HistogramCalibrator(n_bins=B, strategy='quantile').fit(z, y),
+            'UWB': HistogramCalibrator(n_bins=B, strategy='uniform').fit(z, y),
+            'Platt-binning': platt_binning,
+            'Platt': platt,
+            # 'Platt-binning-oracle': BinnedOracleCalibrator(platt_binning.bins, platt, self.pz)
+            # 'Isotonic': IsotonicCalibrator().fit(z, y),
+        }
+
+        # plot
+        if plot:
+            calibrators['Optimal'].plot(label='$h^*$', ls='--', lw=1.5)
+            calibrators['Platt'].plot(label='Platt', lw=1.5)
+            calibrators['Platt-binning'].plot(label='Platt-binning', lw=1.5)
+            calibrators['UWB'].plot(label='UWB', lw=1.5)
+            calibrators['UMB'].plot(label='UMB', lw=1.5, set_layout=True)
+            plt.savefig('sim_compare_methods.pdf', bbox_inches='tight')
+
+        # table
+        metrics = []
+        for name, calibrator in tqdm(calibrators.items()):
+            m = evaluate(calibrator, self.py_given_z, self.pz)
+            for k, v in m.items():
+                metrics.append({
+                    'Calibrator': name,
+                    'Metric': k,
+                    'Value': v,
+                })
+        df = pd.DataFrame(metrics)
+
+        columns = {'cal': '$\REL$', 'sha': '$\GRP$', 'risk': '$R$', 'bs': 'MSE'}
+        indices = ['Platt', 'Platt-binning', 'UWB', 'UMB'] # slice(None)  # ['Platt', 'Platt-binning', 'UMB']
+        df_wide = (
+            df
+            .set_index(['Calibrator', 'Metric'])['Value'].unstack(-1)
+            .loc[indices, columns.keys()]
+            .reindex(indices)
+            .rename(columns=columns)
+            .rename_axis(None, axis=0)
+        )
+        df_str = (df_wide.style
+            .highlight_min(axis=0, props='bfseries: ;', subset=[c for c in df_wide if c not in ['Method', 'Estimator']])
+            .format(precision=6)
+            .to_latex(hrules=True, column_format='c' * (df_wide.shape[1] + 1))
+        )
+        return df_wide, df_str, metrics
+
+    def run_calibrators_asymp(self, n_list=None, B_list=None, i_list=None):
+        if n_list is None:
+            n_list = np.logspace(3, 7, 2, dtype=int)
+        if B_list is None:
+            B_list = np.logspace(0.8, 3, 2, dtype=int)
+        if i_list is None:
+            i_list = np.arange(2)
+        prod = list(itertools.product(n_list, B_list, i_list))
+        # prod = [(n, B, i) for n, B, i in prod if n >= 2 * B] # IndexError: list index out of range
+        def f(n, B, i):
+            _, _, metrics = self.run_calibrators(n, B, i, plot=False)
+            metrics = [m.update({'n': n, 'B': B, 'i': i}) for m in metrics]
+            return metrics
+
+        results = []
+        for args in tqdm(prod, total=len(prod)):
+            results.append(f(*args))
+        # results = [f(*args) for args in prod]
+        # with Pool() as p:
+        #     results = p.starmap(f, prod)
+        df = pd.DataFrame(results)
+        return df
+
+
 class Simulation1(CalibrationSimulationBase):
     """Simulation 1: Gaussian mixture data and sigmoid classifier.
     Y ~ Bernoulli(p)
@@ -246,6 +328,59 @@ class Simulation1(CalibrationSimulationBase):
 
 
 class Simulation2(CalibrationSimulationBase):
+    """Simulation 2:
+    Z ~ Uniform[0, 1]
+    Y | Z ~ Bernoulli, p(y=1|z) = 1 / (1 + 1 / (e^c z^a / (1-z)^b))
+
+    Similar to Beta calibration [Kull'17](https://doi.org/10.1214/17-EJS1338SI),
+    but we set Z ~ Uniform instead of Beta mixture for simplicity.
+    """
+    # def __init__(self, a=0.2, b=5, m=0.5):
+    def __init__(self, a=1, b=1, m=0.25):
+        self.a = a
+        self.b = b
+        self.c = b * np.log(1 - m) - a * np.log(m)
+        self.K = self.get_K()
+
+    def pz(self, z):
+        return 1
+
+    def py_given_z(self, z):
+        # logodds = self.c +  self.a * np.log(z) - self.b * np.log(1 - z)
+        # return sigmoid(logodds)
+        return 1 / (1 + 1 / (np.exp(self.c) * z ** self.a / (1 - z) ** self.b))
+
+    def generate_data(self, n):
+        z = np.random.uniform(size=n)
+        y = np.random.binomial(1, self.py_given_z(z))
+        return z, y
+
+    def get_K(self):
+        mu = self.py_given_z
+
+        def dmu(z):
+            s = mu(z)
+            t1 = self.a / z + self.b / (1 - z)
+            return s * (1 - s) * t1
+
+        def ddmu(z):
+            s = mu(z)
+            t1 = self.a / z + self.b / (1 - z)
+            t2 = - self.a / z ** 2 + self.b / (1 - z) ** 2
+            return (1 - 2 * s) * t1 ** 2 + t2
+
+        def neg(f):
+            def neg_f(z):
+                return -f(z)
+            return neg_f
+
+        res = scipy.optimize.minimize_scalar(neg(dmu), bounds=(0, 1), method='bounded')
+        # x0 = 0.5
+        # res = scipy.optimize.minimize(neg(dmu), x0, jac=neg(ddmu)) # not bounded, ddmu can be small
+        return dmu(res.x)
+
+
+class Simulation3(CalibrationSimulationBase):
     """Simulation 2:
     Z ~ Uniform[0, 1]
     Y | Z ~ Bernoulli, p(y=1|z) = 1 / (1 + 1 / (e^c z^a / (1-z)^b))

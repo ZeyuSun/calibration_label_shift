@@ -3,7 +3,20 @@ import numpy as np
 from matplotlib import pyplot as plt
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
-from utils import expectation, logit, interpolate_nan
+from utils import expectation, sigmoid, logit, interpolate_nan
+
+
+def digitize(x, bins):
+    """
+    Similar to np.digitize(x, bins, right=False) - 1, but the last bin unbounded on the right
+    e.g. bins = [0, 0.5, 1] -> bin 0: [0, 0.5), bin 1: [0.5, inf]
+    if the input is a number, return a number
+    """
+    binids = np.minimum(np.digitize(x, bins), len(bins) - 1)
+    binids -= 1
+    if isinstance(x, (int, float)):
+        binids = binids.item()
+    return binids
 
 
 class BaseCalibrator:
@@ -72,7 +85,7 @@ class BinnedOracleCalibrator(BaseCalibrator):
         ]
 
     def predict(self, z):
-        binids = np.digitize(z, self.bins) - 1
+        binids = digitize(z, self.bins)
         return self.bin_mean[binids]
 
 
@@ -90,8 +103,8 @@ class HistogramCalibrator(BaseCalibrator):
             bins = np.quantile(z, np.linspace(0, 1, self.n_bins + 1))
         else:
             raise ValueError('strategy should be either "uniform" or "quantile".')
-        bins[0], bins[-1] = 0, 1 + 1e-8  # 1e-16 doesn't work: 1 + 1e-16 == 1
-        binids = np.digitize(z, bins) - 1
+        bins[0], bins[-1] = 0., 1.
+        binids = digitize(z, bins)
         bin_total = np.bincount(binids, minlength=self.n_bins)
         bin_true = np.bincount(binids, weights=y, minlength=self.n_bins)
         with warnings.catch_warnings():
@@ -102,7 +115,7 @@ class HistogramCalibrator(BaseCalibrator):
         return self
 
     def predict(self, z):
-        binids = np.digitize(z, self.bins) - 1
+        binids = digitize(z, self.bins)
         return self.bin_mean[binids]
 
 
@@ -120,12 +133,17 @@ class IsotonicCalibrator(BaseCalibrator):
 
     def predict(self, z):
         # NOTE: linear interpolation
+        z = np.atleast_1d(z)
         return self.iso.predict(z)
 
 
 class PlattCalibrator(BaseCalibrator):
+    """Platt scaling
+
+    Note: We follow the implementation in https://github.com/p-lambda/verified_calibration/blob/ee81c346895e3377653bd347c429a95bd631058d/calibration/utils.py#L456. The original Platt uses penalty=None and add pseudo count priors
+    """
     def __init__(self):
-        self.reg = LogisticRegression()
+        self.reg = LogisticRegression(C=1e10, solver='lbfgs')
 
     def fit(self, z, y):
         x = logit(z).reshape(-1, 1)
@@ -135,6 +153,11 @@ class PlattCalibrator(BaseCalibrator):
     def predict(self, z):
         x = logit(z).reshape(-1, 1)
         return self.reg.predict_proba(x)[:, 1]
+
+    def inverse_transform(self, z):
+        x = logit(z)
+        x = (x - self.reg.intercept_) / self.reg.coef_
+        return sigmoid(x)
 
 
 class LabelShiftCalibrator(BaseCalibrator):
@@ -149,6 +172,10 @@ class LabelShiftCalibrator(BaseCalibrator):
 
 
 class ScalingBinningCalibrator(BaseCalibrator):
+    """Scaling binning calibration (Kumar et al. 2019)
+
+    Note: we follow their code which uses [logistic loss](https://github.com/p-lambda/verified_calibration/blob/ee81c346895e3377653bd347c429a95bd631058d/calibration/calibrators.py#L26C38-L26C38), although the paper uses squared loss.
+    """
     def __init__(self, n_bins=10):
         self.platt = PlattCalibrator()
         self.hist = HistogramCalibrator(n_bins=n_bins, strategy='quantile')
@@ -156,6 +183,8 @@ class ScalingBinningCalibrator(BaseCalibrator):
     def fit(self, z, y):
         gz = self.platt.fit(z, y).predict(z)  # g(z)
         self.hist.fit(gz, gz)  # discretize g(z)
+        self.bins = self.platt.inverse_transform(self.hist.bins)[0]
+        self.bin_mean = self.hist.bin_mean
         return self
 
     def predict(self, z):

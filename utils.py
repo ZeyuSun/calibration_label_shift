@@ -12,8 +12,9 @@ def sigmoid(x):
 
 def logit(p):
     # inverse of sigmoid
-    p = np.clip(p, eps, 1-eps)
-    return np.log(p / (1 - p))
+    # p = np.clip(p, eps, 1-eps) # commented out to make sure sigmoid(logit(p)) = p
+    with np.errstate(divide='ignore'):
+        return np.log(p / (1 - p))
 
 
 def dlogit(p):

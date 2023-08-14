@@ -1,6 +1,8 @@
 import unittest
+import numpy as np
 from simulation_calibration import Simulation1
 from simulation_label_shift import LabelShiftSimulation
+from utils import digitize
 
 
 class CalibrationSimulationTestCase(unittest.TestCase):
@@ -38,6 +40,16 @@ class LabelShiftSimulationTestCase(unittest.TestCase):
 
     def test_plot(self):
         self.sim.plot()
+
+
+def test_digitize():
+    bins = [0, 0.3, 0.6, 1]
+    cases = [
+        ([0, 0.3, 0.9, 1], [0, 1, 2, 2]),
+        (0.9, 2),
+    ]
+    for x, y in cases:
+        assert np.all(digitize(x, bins) == y)
 
 
 if __name__ == '__main__':
