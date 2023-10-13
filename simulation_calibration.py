@@ -5,6 +5,8 @@ import numpy as np
 import pandas as pd
 import scipy
 from matplotlib import colors, pyplot as plt
+import plotly.express as px
+import plotly.graph_objects as go
 from sklearn.linear_model import LinearRegression
 from tqdm.auto import tqdm
 
@@ -45,7 +47,7 @@ class CalibrationSimulationBase:
         if B_list is None:
             B_list = np.logspace(0.8, 3, 10, dtype=int)
         if i_list is None:
-            i_list = np.arange(3)
+            i_list = np.arange(10)
         prod = itertools.product(n_list, B_list, i_list)
         # results = [self.run_single(*args) for args in prod]
         with Pool() as p:
@@ -58,14 +60,15 @@ class CalibrationSimulationBase:
         B_list = np.unique(df_raw['B'])
         delta = 0.1  # bounds fail with probability at most delta
         self.K = getattr(self, 'K', None)  # smoothness constant
-        df = df_raw.groupby(['n', 'B']).mean().reset_index()
+        df = df_raw.groupby(['n', 'B']).median().reset_index()
         df_lower = df_raw.groupby(['n', 'B']).quantile(q=delta)
         df_upper = df_raw.groupby(['n', 'B']).quantile(q=1-delta)
         df = df.join(df_lower, on=['n', 'B'], rsuffix='_lower')
         df = df.join(df_upper, on=['n', 'B'], rsuffix='_upper')
+        figsize = (2.5, 2.5)
 
         # cal vs. B
-        plt.figure(figsize=(3, 3))
+        plt.figure(figsize=figsize)
         slopes_weights = []
         for i, n in enumerate(n_list[::2]):
             subdf = df.loc[(df['n'] == n) & (df['B'] <= n / 2)]
@@ -85,7 +88,7 @@ class CalibrationSimulationBase:
         plt.savefig('cal_vs_B.pdf', bbox_inches='tight')
 
         # cal vs. n
-        plt.figure(figsize=(3, 3))
+        plt.figure(figsize=figsize)
         slopes_weights = []
         for i, B in enumerate(B_list[::3]):
             subdf = df.loc[(df['B'] == B) & (df['n'] >= 2 * B)]
@@ -105,7 +108,7 @@ class CalibrationSimulationBase:
         plt.savefig('cal_vs_n.pdf', bbox_inches='tight')
 
         # sha vs. B (all n)
-        plt.figure(figsize=(3, 3))
+        plt.figure(figsize=figsize)
         for i, n in enumerate(n_list[::2]):
             subdf = df.loc[df['n'] == n]
             _B_list = subdf['B'].to_numpy()
@@ -117,7 +120,7 @@ class CalibrationSimulationBase:
         plt.savefig('sha_vs_B_all_n.pdf', bbox_inches='tight')
 
         # sha vs. B
-        plt.figure(figsize=(3, 3))
+        plt.figure(figsize=figsize)
         n = n_list[-1]
         subdf = df.loc[df['n'] == n]
         _B_list = subdf['B'].to_numpy()
@@ -132,7 +135,7 @@ class CalibrationSimulationBase:
         plt.savefig('sha_vs_B.pdf', bbox_inches='tight')
 
         # risk vs. B
-        plt.figure(figsize=(3, 3))
+        plt.figure(figsize=figsize)
         for i, n in enumerate(n_list[::2]):
             subdf = df.loc[(df['n'] == n) & (df['B'] <= n / 2)]
             _B_list = subdf['B'].to_numpy()
@@ -145,7 +148,7 @@ class CalibrationSimulationBase:
         plt.savefig('risk_vs_B.pdf', bbox_inches='tight')
 
         # risk vs. n
-        plt.figure(figsize=(3, 3))
+        plt.figure(figsize=figsize)
         for i, B in enumerate(B_list[::3]):
             subdf = df.loc[(df['B'] == B) & (df['n'] >= 2 * B)]
             _n_list = subdf['n'].to_numpy()
@@ -158,7 +161,7 @@ class CalibrationSimulationBase:
         plt.savefig('risk_vs_n.pdf', bbox_inches='tight')
 
         # optimal B vs. n
-        plt.figure(figsize=(3, 3))
+        plt.figure(figsize=figsize)
         idx_list = np.zeros(len(n_list), dtype=int)  # index of empirically optimal B in B_list
         idx_grid = np.zeros(len(n_list), dtype=int)  # index of theoretically optimal B in B_grid
         B_grid = np.logspace(np.log10(B_list[0]), np.log10(10 * B_list[-1]), 100)
@@ -172,7 +175,7 @@ class CalibrationSimulationBase:
             idx_grid[i] = np.nanargmin(bounds)  # argmin returns first nan index
 
         # optimal B vs. n (linear scale)
-        plt.figure(figsize=(3, 3))
+        plt.figure(figsize=figsize)
         plt.plot(n_list, B_list[idx_list], 'x-', label='experiment')
         plt.plot(n_list, B_grid[idx_grid], 'o--', label='theory')
         plt.xscale('log'); plt.grid()
@@ -180,7 +183,7 @@ class CalibrationSimulationBase:
         plt.savefig('opt_B_linear.pdf', bbox_inches='tight')
 
         # optimal B vs. n (log scale)
-        plt.figure(figsize=(3, 3))
+        plt.figure(figsize=figsize)
         plt.plot(n_list, B_list[idx_list], 'x-', label='experiment')
         plt.plot(n_list, B_grid[idx_grid], 'o--', label='theory')
         plt.plot(n_list, n_list ** (1/3), ':', label='$n^{1/3}$')
@@ -189,7 +192,7 @@ class CalibrationSimulationBase:
         plt.savefig('opt_B_log.pdf', bbox_inches='tight')
 
         # optimal B vs. n (risk surface)
-        fig, ax = plt.subplots(figsize=(3, 3))
+        fig, ax = plt.subplots(figsize=figsize)
         risks_list = [df.loc[df['n'] == n, 'risk'].to_list() for n in n_list]
         im = ax.imshow(np.array(risks_list), origin='lower', cmap='coolwarm', norm=colors.LogNorm())
         ax.set_xticks(np.arange(len(B_list))[::2], B_list[::2])
@@ -199,22 +202,21 @@ class CalibrationSimulationBase:
         plt.xlabel('B'); plt.ylabel('n')
         plt.savefig('opt_B_risk_surface.pdf', bbox_inches='tight')
 
-
     def run_calibrators(self, n=1000, B=None, seed=None, plot=True):
         np.random.seed(seed)
         if B is None:
             B = round(1 * (n ** (1/3)))
         z, y = self.generate_data(n)
 
-        platt_binning = ScalingBinningCalibrator(n_bins=B).fit(z, y)
+        scaling_binning = ScalingBinningCalibrator(n_bins=B).fit(z, y)
         platt = PlattCalibrator().fit(z, y)
         calibrators = {
             'Optimal': OracleCalibrator(self.py_given_z),
-            'UMB': HistogramCalibrator(n_bins=B, strategy='quantile').fit(z, y),
-            'UWB': HistogramCalibrator(n_bins=B, strategy='uniform').fit(z, y),
-            'Platt-binning': platt_binning,
             'Platt': platt,
-            # 'Platt-binning-oracle': BinnedOracleCalibrator(platt_binning.bins, platt, self.pz)
+            'Hybrid': scaling_binning,
+            'UWB': HistogramCalibrator(n_bins=B, strategy='uniform').fit(z, y),
+            'UMB': HistogramCalibrator(n_bins=B, strategy='quantile').fit(z, y),
+            # 'Hybrid-oracle': BinnedOracleCalibrator(scaling_binning.bins, platt, self.pz)
             # 'Isotonic': IsotonicCalibrator().fit(z, y),
         }
 
@@ -222,10 +224,10 @@ class CalibrationSimulationBase:
         if plot:
             calibrators['Optimal'].plot(label='$h^*$', ls='--', lw=1.5)
             calibrators['Platt'].plot(label='Platt', lw=1.5)
-            calibrators['Platt-binning'].plot(label='Platt-binning', lw=1.5)
+            calibrators['Hybrid'].plot(label='Hybrid', lw=1.5)
             calibrators['UWB'].plot(label='UWB', lw=1.5)
             calibrators['UMB'].plot(label='UMB', lw=1.5, set_layout=True)
-            plt.savefig('sim_compare_methods.pdf', bbox_inches='tight')
+            # plt.savefig('compare_logistic.pdf', bbox_inches='tight') # this is in base class; save outside
 
         # table
         metrics = []
@@ -240,7 +242,7 @@ class CalibrationSimulationBase:
         df = pd.DataFrame(metrics)
 
         columns = {'cal': '$\REL$', 'sha': '$\GRP$', 'risk': '$R$', 'bs': 'MSE'}
-        indices = ['Platt', 'Platt-binning', 'UWB', 'UMB'] # slice(None)  # ['Platt', 'Platt-binning', 'UMB']
+        indices = ['Platt', 'Hybrid', 'UWB', 'UMB'] # slice(None)  # ['Platt', 'Hybrid', 'UMB']
         df_wide = (
             df
             .set_index(['Calibrator', 'Metric'])['Value'].unstack(-1)
@@ -258,29 +260,90 @@ class CalibrationSimulationBase:
 
     def run_calibrators_asymp(self, n_list=None, B_list=None, i_list=None):
         if n_list is None:
-            n_list = np.logspace(3, 7, 2, dtype=int)
+            n_list = [5000]  # np.logspace(3, 7, 2, dtype=int)
         if B_list is None:
-            B_list = np.logspace(0.8, 3, 2, dtype=int)
+            B_list = np.logspace(1, 3, 3, dtype=int)  #np.logspace(0.8, 3, 2, dtype=int)
         if i_list is None:
-            i_list = np.arange(2)
+            i_list = np.arange(1)
         prod = list(itertools.product(n_list, B_list, i_list))
         # prod = [(n, B, i) for n, B, i in prod if n >= 2 * B] # IndexError: list index out of range
         def f(n, B, i):
             _, _, metrics = self.run_calibrators(n, B, i, plot=False)
-            metrics = [m.update({'n': n, 'B': B, 'i': i}) for m in metrics]
+            for m in metrics:
+                m.update({'n': n, 'B': B, 'i': i})
             return metrics
 
-        results = []
-        for args in tqdm(prod, total=len(prod)):
-            results.append(f(*args))
+        # results = []
+        # for args in tqdm(prod, total=len(prod)):
+        #     results.extend(f(*args))
         # results = [f(*args) for args in prod]
-        # with Pool() as p:
-        #     results = p.starmap(f, prod)
+        with Pool() as p:
+            results = p.starmap(f, prod)
+        results = [m for metrics in results for m in metrics]
         df = pd.DataFrame(results)
         return df
 
+    def plot_asymp(self, df):
+        df = df.loc[
+            (df['Calibrator'].isin(['Platt', 'Hybrid', 'UMB', 'UWB'])) &
+            (df['Metric'].isin(['cal', 'sha', 'risk']))
+        ]
+        fig = px.line(df, x='B', y='Value', color='Calibrator', facet_row='Metric', log_x=True, log_y=True, line_dash='Calibrator', symbol='Calibrator')
+        fig.update_yaxes(matches=None, showticklabels=True)
+        fig.update_layout(
+            template='simple_white+gridon',
+            width=250,
+            height=450,
+            legend=dict(
+                title_text="",
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            ),
+            margin=go.layout.Margin(
+                l=0, #left margin
+                r=0, #right margin
+                b=0, #bottom margin
+                t=0  #top margin
+            ),
+        )
+        for i, facet_name in enumerate(['R', 'R<sup>sha</sup>', 'R<sup>cal</sup>']):
+            # plotly latex rendering is ugly #[r"$R$", r"$R^{\text{sha}}$", r"$R^{\text{cal}}$"]):
+            fig.update_yaxes(title_text=facet_name, row=i+1, col=1)
+        fig.for_each_annotation(lambda a: a.update(text=''))
+        return fig
 
-class Simulation1(CalibrationSimulationBase):
+    def tabulate(self, df):
+        columns = {'cal': '$\REL$', 'sha': '$\GRP$', 'risk': '$R$', 'bs': 'MSE'}
+        indices = ['Platt', 'Hybrid', 'UWB', 'UMB']
+
+        df_agg = (
+            df
+            .groupby(['Calibrator', 'Metric'])['Value']
+            .agg(lambda s: np.percentile(s, 90))
+            # .agg(lambda s: ufloat(s.mean(), s.std().clip(min=0.0001)) if s.mean() > 0 else 0)
+        )
+        df_wide = (
+            df_agg
+            .unstack(-1)
+            .loc[indices, columns.keys()]
+            .reindex(indices)
+            .rename(columns=columns)
+            .rename_axis(index=None, columns={'Metric': 'Metric ($\\times 10^{-3}$)'})
+            * 10 ** 3
+        )
+        df_str = (
+            df_wide.style
+            .highlight_min(axis=0, props='bfseries: ;')
+            .format(precision=3)
+            .to_latex(hrules=True, column_format='c' * (df_wide.shape[1] + 1))
+        )
+        return df_wide, df_str
+
+
+class GaussianMixtureSimulation(CalibrationSimulationBase):
     """Simulation 1: Gaussian mixture data and sigmoid classifier.
     Y ~ Bernoulli(p)
     X|Y=0 ~ N(-mu, 1)
@@ -327,72 +390,23 @@ class Simulation1(CalibrationSimulationBase):
         return z, y
 
 
-class Simulation2(CalibrationSimulationBase):
+class BetaCalibrationSimulation(CalibrationSimulationBase):
     """Simulation 2:
     Z ~ Uniform[0, 1]
-    Y | Z ~ Bernoulli, p(y=1|z) = 1 / (1 + 1 / (e^c z^a / (1-z)^b))
+    Y | Z ~ Bernoulli with p(y=1|z) = 1 / (1 + 1 / (e^c z^a / (1-z)^b))
 
-    Similar to Beta calibration [Kull'17](https://doi.org/10.1214/17-EJS1338SI),
-    but we set Z ~ Uniform instead of Beta mixture for simplicity.
+    p(y=1|z) is Beta calibration [Kull'17](https://doi.org/10.1214/17-EJS1338SI).
+    We set Z ~ Uniform instead of Beta mixture for simplicity.
     """
     # def __init__(self, a=0.2, b=5, m=0.5):
-    def __init__(self, a=1, b=1, m=0.25):
+    def __init__(self, a=1, b=1, m=None, c=None):
         self.a = a
         self.b = b
-        self.c = b * np.log(1 - m) - a * np.log(m)
-        self.K = self.get_K()
-
-    def pz(self, z):
-        return 1
-
-    def py_given_z(self, z):
-        # logodds = self.c +  self.a * np.log(z) - self.b * np.log(1 - z)
-        # return sigmoid(logodds)
-        return 1 / (1 + 1 / (np.exp(self.c) * z ** self.a / (1 - z) ** self.b))
-
-    def generate_data(self, n):
-        z = np.random.uniform(size=n)
-        y = np.random.binomial(1, self.py_given_z(z))
-        return z, y
-
-    def get_K(self):
-        mu = self.py_given_z
-
-        def dmu(z):
-            s = mu(z)
-            t1 = self.a / z + self.b / (1 - z)
-            return s * (1 - s) * t1
-
-        def ddmu(z):
-            s = mu(z)
-            t1 = self.a / z + self.b / (1 - z)
-            t2 = - self.a / z ** 2 + self.b / (1 - z) ** 2
-            return (1 - 2 * s) * t1 ** 2 + t2
-
-        def neg(f):
-            def neg_f(z):
-                return -f(z)
-            return neg_f
-
-        res = scipy.optimize.minimize_scalar(neg(dmu), bounds=(0, 1), method='bounded')
-        # x0 = 0.5
-        # res = scipy.optimize.minimize(neg(dmu), x0, jac=neg(ddmu)) # not bounded, ddmu can be small
-        return dmu(res.x)
-
-
-class Simulation3(CalibrationSimulationBase):
-    """Simulation 2:
-    Z ~ Uniform[0, 1]
-    Y | Z ~ Bernoulli, p(y=1|z) = 1 / (1 + 1 / (e^c z^a / (1-z)^b))
-
-    Similar to Beta calibration [Kull'17](https://doi.org/10.1214/17-EJS1338SI),
-    but we set Z ~ Uniform instead of Beta mixture for simplicity.
-    """
-    # def __init__(self, a=0.2, b=5, m=0.5):
-    def __init__(self, a=1, b=1, m=0.25):
-        self.a = a
-        self.b = b
-        self.c = b * np.log(1 - m) - a * np.log(m)
+        assert m is None and c is not None or m is not None and c is None
+        if c is None:
+            self.c = b * np.log(1 - m) - a * np.log(m)
+        else:
+            self.c = c
         self.K = self.get_K()
 
     def pz(self, z):

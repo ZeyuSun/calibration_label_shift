@@ -151,6 +151,7 @@ class PlattCalibrator(BaseCalibrator):
         return self
 
     def predict(self, z):
+        z = np.clip(z, 1e-16, 1 - 1e-16)  # reg.predict_proba can't handle inf
         x = logit(z).reshape(-1, 1)
         return self.reg.predict_proba(x)[:, 1]
 
