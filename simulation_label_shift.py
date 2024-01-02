@@ -186,6 +186,7 @@ class LabelShiftSimulation:
         calibrators['oracle'] = OracleCalibrator(dt.py_given_z)
 
         # calibration curves
+        plt.figure(figsize=(2.8,2.8))
         symbols = {
             'oracle': '$h^*_Q$',
             'source': '$\hat{h}_P$',
