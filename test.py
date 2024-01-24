@@ -52,5 +52,12 @@ def test_digitize():
         assert np.all(digitize(x, bins) == y)
 
 
+def test_evaluate_sample():
+    # Code clipped from jupyter notebook are lost
+    # See results at figures/test_evaluate_sample/cal.png
+    # Conclusion: 10**6 samples can control errors under 1e-4
+    pass
+
+
 if __name__ == '__main__':
     unittest.main()

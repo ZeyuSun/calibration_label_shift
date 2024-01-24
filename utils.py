@@ -48,3 +48,13 @@ def interpolate_nan(a):
     i = np.arange(len(b))
     b[nans] = np.interp(i[nans], i[~nans], b[~nans])
     return b
+
+
+def sci(x, precision=1):
+    # scientific notation
+    exponent = int(np.log10(x))
+    coeff = x / 10 ** exponent
+    if np.abs(coeff - 1) < 10**(-precision):
+        return f'$10^{exponent}$'
+    else:
+        return f'${coeff:.{precision}f} \\times 10^{exponent}$'

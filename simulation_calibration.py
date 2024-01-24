@@ -1,76 +1,78 @@
 import itertools
 # from multiprocessing import Pool
 from multiprocess import Pool
+from pathlib import Path
 import numpy as np
 import pandas as pd
-import scipy
 from matplotlib import colors, pyplot as plt
 import plotly.express as px
 import plotly.graph_objects as go
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.naive_bayes import GaussianNB
+from sklearn.tree import DecisionTreeClassifier
 from tqdm.auto import tqdm
 
 from calibration import OracleCalibrator, BinnedOracleCalibrator, HistogramCalibrator, PlattCalibrator, ScalingBinningCalibrator
-from utils import expectation, sigmoid, logit, dlogit
+from utils import expectation, sci
 from bounds import CAL, SHA, RISK
 
 
-class CalibrationSimulationBase:
-    """Calibration simulation base class.
-    Subclass this class and implement the following methods:
-    - generate_data
-    - py_given_z
-    - pz
+class CalibrationSimulation:
+    """Calibration simulation class
+
+    Attributes:
+        data: simulation data object with attribute `K` and the following methods:
+            - sample(n): return z, y
+            - py_given_z(z): return p(y=1|z)
+            - pz(z): return p(z)
     """
+    def __init__(self, data):
+        self.data = data
 
-    def pz(self, z):  # p(z)
-        raise NotImplementedError
-
-    def py_given_z(self, z):  # P[Y=1 | Z=z]
-        raise NotImplementedError
-
-    def generate_data(self, n):  # n: sample size
-        raise NotImplementedError
-
-    def run_single(self, n, B, i):
+    def run_umb_single(self, n, B, i):
         np.random.seed(i)
-        z, y = self.generate_data(n)
+        z, y = self.data.sample(n)
         calibrator = HistogramCalibrator(n_bins=B, strategy='quantile')
         calibrator.fit(z, y)
-        metrics = evaluate(calibrator, self.py_given_z, self.pz)
+        metrics = evaluate_quadrature(calibrator, self.data.py_given_z, self.data.pz)
         metrics.update({'n': n, 'B': B, 'i': i})
         return metrics
 
-    def run(self, n_list=None, B_list=None, i_list=None):
+    def run_umb(self, n_list=None, B_list=None, i_list=None):
         if n_list is None:
-            n_list = np.logspace(2, 7, 7, dtype=int)
+            n_list = np.logspace(3, 7.5, 6, dtype=int)
         if B_list is None:
             B_list = np.logspace(0.8, 3, 10, dtype=int)
         if i_list is None:
             i_list = np.arange(10)
         prod = itertools.product(n_list, B_list, i_list)
-        # results = [self.run_single(*args) for args in prod]
+        # results = [self.run_umb_single(*args) for args in prod]
         with Pool() as p:
-            results = p.starmap(self.run_single, prod)
+            results = p.starmap(self.run_umb_single, prod)
         df = pd.DataFrame(results)
         return df
 
-    def plot(self, df_raw):
+    def plot_umb(self, df_raw, folder='.'):
+        folder = Path(folder)
+        folder.mkdir(parents=False, exist_ok=True)
         n_list = np.unique(df_raw['n'])
+        n_list_for_curves = n_list[::np.ceil(len(n_list)/3).astype(int)]
         B_list = np.unique(df_raw['B'])
+        B_list_for_curves = B_list[::np.ceil(len(B_list)/3).astype(int)]
+
         delta = 0.1  # bounds fail with probability at most delta
-        self.K = getattr(self, 'K', None)  # smoothness constant
+        K = getattr(self.data, 'K', None)  # smoothness constant
         df = df_raw.groupby(['n', 'B']).median().reset_index()
         df_lower = df_raw.groupby(['n', 'B']).quantile(q=delta)
         df_upper = df_raw.groupby(['n', 'B']).quantile(q=1-delta)
         df = df.join(df_lower, on=['n', 'B'], rsuffix='_lower')
         df = df.join(df_upper, on=['n', 'B'], rsuffix='_upper')
-        figsize = (2.5, 2.5)
+        figsize = (4, 4)
 
         # cal vs. B
         plt.figure(figsize=figsize)
         slopes_weights = []
-        for i, n in enumerate(n_list[::2]):
+        for i, n in enumerate(n_list_for_curves):
             subdf = df.loc[(df['n'] == n) & (df['B'] <= n / 2)]
             _B_list = subdf['B'].to_numpy()
             B_grid = np.linspace(_B_list[0], _B_list[-1], 100)
@@ -78,19 +80,20 @@ class CalibrationSimulationBase:
             reg = LinearRegression().fit(np.log(_B_list).reshape(-1, 1), np.log(subdf['cal']))
             slopes_weights.append([reg.coef_[0], len(_B_list)])
 
-            plt.plot(_B_list, subdf['cal'], c=f'C{i}', label=f'n={n:.1e}')
+            plt.plot(_B_list, subdf['cal'], c=f'C{i}', label='n='+sci(n))
             plt.fill_between(_B_list, subdf['cal_lower'], subdf['cal_upper'], color=f'C{i}', alpha=0.2)
             plt.plot(B_grid, CAL(B_grid, n, delta), c=f'C{i}', ls='--')
         slopes, weights = zip(*slopes_weights)
         print('cal vs. B', np.average(slopes, weights=weights))
         plt.xscale('log'); plt.yscale('log'); plt.grid()
-        plt.xlabel('B'); plt.ylabel('Calibration Risk'); plt.legend(framealpha=0.3)
-        plt.savefig('cal_vs_B.pdf', bbox_inches='tight')
+        plt.xlabel('B'); plt.ylabel('Calibration Risk'); plt.legend(framealpha=0.4, loc='upper left')
+        # plt.ylim(1.1e-9, 600)
+        plt.savefig(folder / 'cal_vs_B.pdf', bbox_inches='tight')
 
         # cal vs. n
         plt.figure(figsize=figsize)
         slopes_weights = []
-        for i, B in enumerate(B_list[::3]):
+        for i, B in enumerate(B_list_for_curves):
             subdf = df.loc[(df['B'] == B) & (df['n'] >= 2 * B)]
             _n_list = subdf['n'].to_numpy()
             n_grid = np.linspace(_n_list[0], _n_list[-1], 100)
@@ -105,19 +108,19 @@ class CalibrationSimulationBase:
         print('cal vs. n', np.average(slopes, weights=weights))
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('n'); plt.ylabel('Calibration Risk'); plt.legend(framealpha=0.3)
-        plt.savefig('cal_vs_n.pdf', bbox_inches='tight')
+        plt.savefig(folder / 'cal_vs_n.pdf', bbox_inches='tight')
 
         # sha vs. B (all n)
         plt.figure(figsize=figsize)
-        for i, n in enumerate(n_list[::2]):
+        for i, n in enumerate(n_list_for_curves):
             subdf = df.loc[df['n'] == n]
             _B_list = subdf['B'].to_numpy()
             B_grid = np.linspace(_B_list[0], _B_list[-1], 100)
-            plt.plot(_B_list, subdf['sha'], c=f'C{i}', label=f'n={n:.1e}')
-            plt.plot(B_grid, SHA(B_grid, self.K), c=f'C{i}', ls='--')
+            plt.plot(_B_list, subdf['sha'], c=f'C{i}', label='n='+sci(n))
+            plt.plot(B_grid, SHA(B_grid, self.data.K), c=f'C{i}', ls='--')
         plt.xscale('log'); plt.yscale('log'); plt.grid()
-        plt.xlabel('B'); plt.ylabel('Sharpness Risk'); plt.legend(framealpha=0.3)
-        plt.savefig('sha_vs_B_all_n.pdf', bbox_inches='tight')
+        plt.xlabel('B'); plt.ylabel('Sharpness Risk'); plt.legend(framealpha=0.4, loc='upper right')
+        plt.savefig(folder / 'sha_vs_B_all_n.pdf', bbox_inches='tight')
 
         # sha vs. B
         plt.figure(figsize=figsize)
@@ -129,7 +132,7 @@ class CalibrationSimulationBase:
         print('sha vs. B', reg.coef_[0])
         plt.plot(_B_list, subdf['sha'], 'o-', c='C0', label='$R^{\mathrm{sha}}$')
         plt.fill_between(_B_list, subdf['sha_lower'], subdf['sha_upper'], color='C0', alpha=0.2)
-        plt.plot(B_grid, SHA(B_grid, self.K), c='C0', ls='--', label='bound')
+        plt.plot(B_grid, SHA(B_grid, K), c='C0', ls='--', label='bound')
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('B'); plt.ylabel('Sharpness Risk'); plt.legend(framealpha=0.3)
         plt.savefig('sha_vs_B.pdf', bbox_inches='tight')
@@ -142,7 +145,7 @@ class CalibrationSimulationBase:
             B_grid = np.linspace(_B_list[0], _B_list[-1], 100)
             plt.plot(_B_list, subdf['risk'], c=f'C{i}', label=f'n={n:.1e}')
             plt.fill_between(_B_list, subdf['risk_lower'], subdf['risk_upper'], color=f'C{i}', alpha=0.2)
-            plt.plot(B_grid, RISK(B_grid, n, delta, self.K), c=f'C{i}', ls='--')
+            plt.plot(B_grid, RISK(B_grid, n, delta, K), c=f'C{i}', ls='--')
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('B'); plt.ylabel('Risk'); plt.legend(framealpha=0.3)
         plt.savefig('risk_vs_B.pdf', bbox_inches='tight')
@@ -155,7 +158,7 @@ class CalibrationSimulationBase:
             n_grid = np.linspace(_n_list[0], _n_list[-1], 100)
             plt.plot(_n_list, subdf['risk'], c=f'C{i}', label=f'B={B}')
             plt.fill_between(_n_list, subdf['risk_lower'], subdf['risk_upper'], color=f'C{i}', alpha=0.2)
-            plt.plot(n_grid, RISK(B, n_grid, delta, self.K), c=f'C{i}', ls='--')
+            plt.plot(n_grid, RISK(B, n_grid, delta, K), c=f'C{i}', ls='--')
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('n'); plt.ylabel('Risk'); plt.legend(framealpha=0.3)
         plt.savefig('risk_vs_n.pdf', bbox_inches='tight')
@@ -171,7 +174,7 @@ class CalibrationSimulationBase:
             idx_list[i] = np.argmin(risks)
 
             _B_grid = B_grid[B_grid <= n / 2]
-            bounds = RISK(_B_grid, n, delta, self.K)
+            bounds = RISK(_B_grid, n, delta, K)
             idx_grid[i] = np.nanargmin(bounds)  # argmin returns first nan index
 
         # optimal B vs. n (linear scale)
@@ -202,21 +205,21 @@ class CalibrationSimulationBase:
         plt.xlabel('B'); plt.ylabel('n')
         plt.savefig('opt_B_risk_surface.pdf', bbox_inches='tight')
 
-    def run_calibrators(self, n=1000, B=None, seed=None, plot=True):
+    def run_calibrators_single(self, n=1000, B=None, seed=None, plot=True):
         np.random.seed(seed)
         if B is None:
             B = round(1 * (n ** (1/3)))
-        z, y = self.generate_data(n)
+        z, y = self.data.sample(n)
 
         scaling_binning = ScalingBinningCalibrator(n_bins=B).fit(z, y)
         platt = PlattCalibrator().fit(z, y)
         calibrators = {
-            'Optimal': OracleCalibrator(self.py_given_z),
+            'Optimal': OracleCalibrator(self.data.py_given_z),
             'Platt': platt,
             'Hybrid': scaling_binning,
             'UWB': HistogramCalibrator(n_bins=B, strategy='uniform').fit(z, y),
             'UMB': HistogramCalibrator(n_bins=B, strategy='quantile').fit(z, y),
-            # 'Hybrid-oracle': BinnedOracleCalibrator(scaling_binning.bins, platt, self.pz)
+            # 'Hybrid-oracle': BinnedOracleCalibrator(scaling_binning.bins, platt, self.data.pz)
             # 'Isotonic': IsotonicCalibrator().fit(z, y),
         }
 
@@ -232,7 +235,7 @@ class CalibrationSimulationBase:
         # table
         metrics = []
         for name, calibrator in tqdm(calibrators.items()):
-            m = evaluate(calibrator, self.py_given_z, self.pz)
+            m = evaluate_quadrature(calibrator, self.data.py_given_z, self.data.pz)
             for k, v in m.items():
                 metrics.append({
                     'Calibrator': name,
@@ -258,7 +261,7 @@ class CalibrationSimulationBase:
         )
         return df_wide, df_str, metrics
 
-    def run_calibrators_asymp(self, n_list=None, B_list=None, i_list=None):
+    def run_calibrators(self, n_list=None, B_list=None, i_list=None):
         if n_list is None:
             n_list = [5000]  # np.logspace(3, 7, 2, dtype=int)
         if B_list is None:
@@ -268,7 +271,7 @@ class CalibrationSimulationBase:
         prod = list(itertools.product(n_list, B_list, i_list))
         # prod = [(n, B, i) for n, B, i in prod if n >= 2 * B] # IndexError: list index out of range
         def f(n, B, i):
-            _, _, metrics = self.run_calibrators(n, B, i, plot=False)
+            _, _, metrics = self.run_calibrators_single(n, B, i, plot=False)
             for m in metrics:
                 m.update({'n': n, 'B': B, 'i': i})
             return metrics
@@ -283,7 +286,7 @@ class CalibrationSimulationBase:
         df = pd.DataFrame(results)
         return df
 
-    def plot_asymp(self, df):
+    def plot_calibrators(self, df):
         df = df.loc[
             (df['Calibrator'].isin(['Platt', 'Hybrid', 'UMB', 'UWB'])) &
             (df['Metric'].isin(['cal', 'sha', 'risk']))
@@ -315,7 +318,7 @@ class CalibrationSimulationBase:
         fig.for_each_annotation(lambda a: a.update(text=''))
         return fig
 
-    def tabulate(self, df):
+    def tabulate_calibrators(self, df):
         columns = {'cal': '$\REL$', 'sha': '$\GRP$', 'risk': '$R$', 'bs': 'MSE'}
         indices = ['Platt', 'Hybrid', 'UWB', 'UMB']
 
@@ -342,112 +345,68 @@ class CalibrationSimulationBase:
         )
         return df_wide, df_str
 
+    def run_classifiers_prepare(self):
+        # define and train classifiers
+        self.classifiers = {
+            'Logistic': LogisticRegression(),
+            'Naive Bayes': GaussianNB(),
+            'Decision Tree': DecisionTreeClassifier(max_depth=4, min_samples_leaf=0.05),
+        }
+        n_train = 1000
+        x_train, y_train = self.data.sample(n_train)
+        for name, clf in self.classifiers.items():
+            clf.fit(x_train.reshape(-1, 1), y_train)
 
-class GaussianMixtureSimulation(CalibrationSimulationBase):
-    """Simulation 1: Gaussian mixture data and sigmoid classifier.
-    Y ~ Bernoulli(p)
-    X|Y=0 ~ N(-mu, 1)
-    X|Y=1 ~ N(mu, 1)
-    Z = f(X) = sigmoid(X)
-    """
+    def run_classifiers_batch(self, n, B, i):
+        # calibrate classifiers
+        np.random.seed(i)
+        x_cal, y_cal = self.data.sample(n, 'xy')
+        x_test, y_test = self.data.sample(10**7, 'xy')
+        results = []
+        for clf_name, clf in self.classifiers.items():
+            calibrator = HistogramCalibrator(n_bins=B, strategy='quantile')
+            calibrator.fit(clf.predict_proba(x_cal.reshape(-1, 1))[:, 1], y_cal)
 
-    def __init__(self, mu=2, p=0.5):
-        self.mu = mu
-        self.p = p
-        self.f = sigmoid
-        self.f_inv = logit
-        self.f_inv_der = dlogit
-        self.K = 20  # estimated by simulation
+            z_pred = calibrator.predict(clf.predict_proba(x_test.reshape(-1, 1))[:, 1])
+            z_true = self.data.py_given_x(x_test)
+            metrics = evaluate_sample(z_pred, z_true, y=y_test)
+            metrics.update({'n': n, 'B': B, 'i': i, 'classifier': clf_name})
+            results.append(metrics)
+        return results
 
-    def px(self, x):
-        likelihood_0 = scipy.stats.norm.pdf(x, loc=-self.mu, scale=1)
-        likelihood_1 = scipy.stats.norm.pdf(x, loc=self.mu, scale=1)
-        return self.p * likelihood_1 + (1 - self.p) * likelihood_0
+    def run_classifiers(self, n_list=None, B_list=None, i_list=None):
+        if n_list is None:
+            n_list = np.logspace(2, 7, 7, dtype=int)
+        if B_list is None:
+            B_list = np.logspace(0.8, 3, 10, dtype=int)
+        if i_list is None:
+            i_list = np.arange(10)
+        self.run_classifiers_prepare()  # train the classifiers
+        prod = itertools.product(n_list, B_list, i_list)
+        # results = [self.run_classifiers_batch(*args) for args in prod]
+        with Pool() as p:
+            results = p.starmap(self.run_classifiers_batch, prod)
+        results = [r for batch in results for r in batch] # flatten
+        df = pd.DataFrame(results)
+        return df
 
-    def pz(self, z):
-        """
-        z = f(x)
-        p(z) = p(x) dx/dz
-        dx/dz: jacobian
-        """
-        x = self.f_inv(z)
-        px = self.px(x)
-        jac = self.f_inv_der(z)
-        return px * jac
-
-    def py_given_z(self, z):
-        x = self.f_inv(z)
-        logodds = 2 * self.mu * x + np.log(self.p / (1 - self.p))
-        return sigmoid(logodds)
-
-    def generate_data(self, n):
-        y = np.random.binomial(1, self.p, size=n)
-        n1 = np.sum(y)
-        x = np.zeros(n)
-        x[y == 0] = np.random.normal(-self.mu, 1, size=n-n1)
-        x[y == 1] = np.random.normal(self.mu, 1, size=n1)
-        z = self.f(x)
-        return z, y
-
-
-class BetaCalibrationSimulation(CalibrationSimulationBase):
-    """Simulation 2:
-    Z ~ Uniform[0, 1]
-    Y | Z ~ Bernoulli with p(y=1|z) = 1 / (1 + 1 / (e^c z^a / (1-z)^b))
-
-    p(y=1|z) is Beta calibration [Kull'17](https://doi.org/10.1214/17-EJS1338SI).
-    We set Z ~ Uniform instead of Beta mixture for simplicity.
-    """
-    # def __init__(self, a=0.2, b=5, m=0.5):
-    def __init__(self, a=1, b=1, m=None, c=None):
-        self.a = a
-        self.b = b
-        assert m is None and c is not None or m is not None and c is None
-        if c is None:
-            self.c = b * np.log(1 - m) - a * np.log(m)
-        else:
-            self.c = c
-        self.K = self.get_K()
-
-    def pz(self, z):
-        return 1
-
-    def py_given_z(self, z):
-        # logodds = self.c +  self.a * np.log(z) - self.b * np.log(1 - z)
-        # return sigmoid(logodds)
-        return 1 / (1 + 1 / (np.exp(self.c) * z ** self.a / (1 - z) ** self.b))
-
-    def generate_data(self, n):
-        z = np.random.uniform(size=n)
-        y = np.random.binomial(1, self.py_given_z(z))
-        return z, y
-
-    def get_K(self):
-        mu = self.py_given_z
-
-        def dmu(z):
-            s = mu(z)
-            t1 = self.a / z + self.b / (1 - z)
-            return s * (1 - s) * t1
-
-        def ddmu(z):
-            s = mu(z)
-            t1 = self.a / z + self.b / (1 - z)
-            t2 = - self.a / z ** 2 + self.b / (1 - z) ** 2
-            return (1 - 2 * s) * t1 ** 2 + t2
-
-        def neg(f):
-            def neg_f(z):
-                return -f(z)
-            return neg_f
-
-        res = scipy.optimize.minimize_scalar(neg(dmu), bounds=(0, 1), method='bounded')
-        # x0 = 0.5
-        # res = scipy.optimize.minimize(neg(dmu), x0, jac=neg(ddmu)) # not bounded, ddmu can be small
-        return dmu(res.x)
+    def plot_classifiers(self, *args, **kwargs):
+        self.plot_umb(*args, **kwargs)
 
 
-def evaluate(calibrator, py_given_z, pz):
+def evaluate(calibrator, data):
+    if hasattr(data, 'py_given_z') and hasattr(data, 'pz'):
+        return evaluate_quadrature(calibrator, data.py_given_z, data.pz)
+    elif hasattr(data, 'sample') and hasattr(data, 'py_given_x'):
+        z_pred, z_true, y_true = data.sample(10**7)
+        z_pred = calibrator.predict_proba(x.reshape(-1, 1))[:, 1]
+        z_true = data.py_given_x(x)
+        return evaluate_sample(z_pred, z_true, y=y_true)
+    else:
+        raise ValueError('data must have py_given_z and pz or sample and py_given_x')
+
+
+def evaluate_quadrature(calibrator, py_given_z, pz):
     """Evaluate population metrics of a calibrator."""
     oracle = OracleCalibrator(py_given_z)
     if hasattr(calibrator, 'bins'):
@@ -460,8 +419,37 @@ def evaluate(calibrator, py_given_z, pz):
         'cal': expectation(lambda z: (calibrator(z) - binned_oracle(z)) ** 2, pz),  # calibration risk; reliability
         'sha': expectation(lambda z: (binned_oracle(z) - oracle(z)) ** 2, pz),  # sharpness risk; grouping risk
         # 'risk': expectation(lambda z: (calibrator(z) - oracle(z)) ** 2, pz),  # total risk
-        'ref': expectation(lambda z: (oracle(z) * (1-oracle(z))) ** 2, pz),  # refinement
+        'ref': expectation(lambda z: (oracle(z) * (1-oracle(z))), pz),  # refinement
     }
     results['risk'] = results['cal'] + results['sha']  # total risk
     results['bs'] = results['risk'] + results['ref']  # Brier score; mean squared error
     return results
+
+
+def evaluate_sample(z_calibrated, z_oracle, *, y=None):
+    """
+    Args:
+        z_calibrated: calibrated probabilities
+        z_oracle: oracle probabilities
+        y: true labels. If None, only calibration risk, sharpness risk, and excess risk are returned.
+    Returns:
+        estimates: dict of estimates, with keys:
+        - 'cal': calibration risk; reliability
+        - 'sha': sharpness risk; grouping risk
+        - 'risk': excess risk; sum of calibration risk and sharpness risk
+        - 'ref': refinement; Bayes minimum risk
+        - 'bs': Brier score; mean squared error. Returned when y is not None
+    """
+    df = (pd.DataFrame({'z_oracle': z_oracle, 'z_calibrated': z_calibrated})
+          .groupby('z_calibrated')['z_oracle']
+          .agg(['mean', np.var, 'count'])
+          .reset_index())
+    estimates = {
+        'cal': np.average((df['z_calibrated'] - df['mean'])**2, weights=df['count']),
+        'sha': np.average(df['var'], weights=df['count']),
+        'risk': np.average((z_calibrated - z_oracle)**2),
+    }
+    if y is not None:
+        estimates['ref'] = np.average((y - z_oracle)**2)
+        estimates['bs'] = np.average((y - z_calibrated)**2)
+    return estimates

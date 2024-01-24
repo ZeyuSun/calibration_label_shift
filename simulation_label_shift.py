@@ -3,77 +3,29 @@ from multiprocessing import Pool
 from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
-import scipy
 from uncertainties import ufloat
 
 from calibration import HistogramCalibrator, LabelShiftCalibrator, CompositeCalibrator, OracleCalibrator
-from simulation_calibration import evaluate
-from utils import dlogit, logit, sigmoid
-
-
-class GaussianMixture:
-    """Simulation 1: Gaussian mixture data and sigmoid classifier.
-    Y ~ Bernoulli(p)
-    X|Y=0 ~ N(-mu, 1)
-    X|Y=1 ~ N(mu, 1)
-    Z = f(X) = sigmoid(X)
-    """
-
-    def __init__(self, mu=2, p=0.5):
-        self.mu = mu
-        self.p = p
-        self.f = sigmoid
-        self.f_inv = logit
-        self.f_inv_der = dlogit
-        self.K = 20  # estimated by simulation
-
-    def px(self, x):
-        likelihood_0 = scipy.stats.norm.pdf(x, loc=-self.mu, scale=1)
-        likelihood_1 = scipy.stats.norm.pdf(x, loc=self.mu, scale=1)
-        return self.p * likelihood_1 + (1 - self.p) * likelihood_0
-
-    def pz(self, z):
-        """
-        z = f(x)
-        p(z) = p(x) dx/dz
-        dx/dz: jacobian
-        """
-        x = self.f_inv(z)
-        px = self.px(x)
-        jac = self.f_inv_der(z)
-        return px * jac
-
-    def py_given_z(self, z):
-        x = self.f_inv(z)
-        logodds = 2 * self.mu * x + np.log(self.p / (1 - self.p))
-        return sigmoid(logodds)
-
-    def sample(self, n):
-        y = np.random.binomial(1, self.p, size=n)
-        n1 = np.sum(y)
-        x = np.zeros(n)
-        x[y == 0] = np.random.normal(-self.mu, 1, size=n-n1)
-        x[y == 1] = np.random.normal(self.mu, 1, size=n1)
-        z = self.f(x)
-        return z, y
+from simulation_data import GaussianMixtureData
+from simulation_calibration import evaluate_quadrature
 
 
 class LabelShiftSimulation:
     def __init__(self):
-        self.ds = GaussianMixture(p=0.5)  # source data
+        self.ds = GaussianMixtureData(p=0.5)  # source data
         self.ns = 1000  # source sample size
 
     def run_single(self, nt, pt, i, return_calibrators=False):
         np.random.seed(i)
         results = []
         params = {'nt': nt, 'pt': pt, 'i': i}
-        dt = GaussianMixture(p=pt)  # target data
+        dt = GaussianMixtureData(p=pt)  # target data
 
         # Source: only calibrate on source data
         zs, ys = self.ds.sample(self.ns)
         Bs = int(self.ns ** (1 / 3))
         hs = HistogramCalibrator(n_bins=Bs, strategy='quantile').fit(zs, ys)
-        metrics = evaluate(hs, dt.py_given_z, dt.pz)
+        metrics = evaluate_quadrature(hs, dt.py_given_z, dt.pz)
         results.extend([params | {'method': 'source', 'metric': k, 'value': v}
                         for k, v in metrics.items()])
 
@@ -81,19 +33,19 @@ class LabelShiftSimulation:
         zt, yt = dt.sample(nt)
         Bt = int(nt ** (1 / 3))
         ht = HistogramCalibrator(n_bins=Bt, strategy='quantile').fit(zt, yt)
-        metrics = evaluate(ht, dt.py_given_z, dt.pz)
+        metrics = evaluate_quadrature(ht, dt.py_given_z, dt.pz)
         results.extend([params | {'method': 'target', 'metric': k, 'value': v}
                         for k, v in metrics.items()])
 
         # Label shift: only perform label shift correction
         hls = LabelShiftCalibrator(np.mean(ys), np.mean(yt))
-        metrics = evaluate(hls, dt.py_given_z, dt.pz)
+        metrics = evaluate_quadrature(hls, dt.py_given_z, dt.pz)
         results.extend([params | {'method': 'label shift', 'metric': k, 'value': v}
                         for k, v in metrics.items()])
 
         # Composite: calibrate on source data first, then perform label shift correction
         hc = CompositeCalibrator([hs, hls])
-        metrics = evaluate(hc, dt.py_given_z, dt.pz)
+        metrics = evaluate_quadrature(hc, dt.py_given_z, dt.pz)
         results.extend([params | {'method': 'composite', 'metric': k, 'value': v}
                         for k, v in metrics.items()])
 
@@ -181,7 +133,7 @@ class LabelShiftSimulation:
     def plot(self):
         nt, pt = 1000, 0.1
         self.ns = 100000
-        dt = GaussianMixture(p=pt)
+        dt = GaussianMixtureData(p=pt)
         _, calibrators = self.run_single(nt=nt, pt=pt, i=0, return_calibrators=True)
         calibrators['oracle'] = OracleCalibrator(dt.py_given_z)
 
