@@ -7,9 +7,11 @@ import pandas as pd
 from matplotlib import colors, pyplot as plt
 import plotly.express as px
 import plotly.graph_objects as go
+from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.naive_bayes import GaussianNB
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from tqdm.auto import tqdm
 
 from calibration import OracleCalibrator, BinnedOracleCalibrator, HistogramCalibrator, PlattCalibrator, ScalingBinningCalibrator
@@ -135,7 +137,7 @@ class CalibrationSimulation:
         plt.plot(B_grid, SHA(B_grid, K), c='C0', ls='--', label='bound')
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('B'); plt.ylabel('Sharpness Risk'); plt.legend(framealpha=0.3)
-        plt.savefig('sha_vs_B.pdf', bbox_inches='tight')
+        plt.savefig(folder / 'sha_vs_B.pdf', bbox_inches='tight')
 
         # risk vs. B
         plt.figure(figsize=figsize)
@@ -148,7 +150,7 @@ class CalibrationSimulation:
             plt.plot(B_grid, RISK(B_grid, n, delta, K), c=f'C{i}', ls='--')
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('B'); plt.ylabel('Risk'); plt.legend(framealpha=0.3)
-        plt.savefig('risk_vs_B.pdf', bbox_inches='tight')
+        plt.savefig(folder / 'risk_vs_B.pdf', bbox_inches='tight')
 
         # risk vs. n
         plt.figure(figsize=figsize)
@@ -161,7 +163,7 @@ class CalibrationSimulation:
             plt.plot(n_grid, RISK(B, n_grid, delta, K), c=f'C{i}', ls='--')
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('n'); plt.ylabel('Risk'); plt.legend(framealpha=0.3)
-        plt.savefig('risk_vs_n.pdf', bbox_inches='tight')
+        plt.savefig(folder / 'risk_vs_n.pdf', bbox_inches='tight')
 
         # optimal B vs. n
         plt.figure(figsize=figsize)
@@ -183,7 +185,7 @@ class CalibrationSimulation:
         plt.plot(n_list, B_grid[idx_grid], 'o--', label='theory')
         plt.xscale('log'); plt.grid()
         plt.xlabel('n'); plt.ylabel('Optimal B'); plt.legend(framealpha=0.3)
-        plt.savefig('opt_B_linear.pdf', bbox_inches='tight')
+        plt.savefig(folder / 'opt_B_linear.pdf', bbox_inches='tight')
 
         # optimal B vs. n (log scale)
         plt.figure(figsize=figsize)
@@ -192,7 +194,7 @@ class CalibrationSimulation:
         plt.plot(n_list, n_list ** (1/3), ':', label='$n^{1/3}$')
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('n'); plt.ylabel('Optimal B'); plt.legend(framealpha=0.3)
-        plt.savefig('opt_B_log.pdf', bbox_inches='tight')
+        plt.savefig(folder / 'opt_B_log.pdf', bbox_inches='tight')
 
         # optimal B vs. n (risk surface)
         fig, ax = plt.subplots(figsize=figsize)
@@ -203,7 +205,7 @@ class CalibrationSimulation:
         ax.scatter(idx_list, np.arange(len(n_list)), marker='o', c='k')
         fig.colorbar(im, label='Risk', orientation='horizontal', location='top', pad=0.03)
         plt.xlabel('B'); plt.ylabel('n')
-        plt.savefig('opt_B_risk_surface.pdf', bbox_inches='tight')
+        plt.savefig(folder / 'opt_B_risk_surface.pdf', bbox_inches='tight')
 
     def run_calibrators_single(self, n=1000, B=None, seed=None, plot=True):
         np.random.seed(seed)
@@ -348,12 +350,15 @@ class CalibrationSimulation:
     def run_classifiers_prepare(self):
         # define and train classifiers
         self.classifiers = {
+            # 'kNN': KNeighborsClassifier(n_neighbors=100),  # time consuming in evaluate_sample
             'Logistic': LogisticRegression(),
             'Naive Bayes': GaussianNB(),
             'Decision Tree': DecisionTreeClassifier(max_depth=4, min_samples_leaf=0.05),
+            # 'Random Forest': RandomForestClassifier(n_estimators=50, max_depth=8, min_samples_leaf=0.05),  # time consuming in fitting
+            'Gradient Boosting': GradientBoostingClassifier(n_estimators=50, max_depth=4, min_samples_leaf=0.05),
         }
-        n_train = 1000
-        x_train, y_train = self.data.sample(n_train)
+        n_train = 500
+        x_train, y_train = self.data.sample(n_train, 'xy')
         for name, clf in self.classifiers.items():
             clf.fit(x_train.reshape(-1, 1), y_train)
 
@@ -361,7 +366,7 @@ class CalibrationSimulation:
         # calibrate classifiers
         np.random.seed(i)
         x_cal, y_cal = self.data.sample(n, 'xy')
-        x_test, y_test = self.data.sample(10**7, 'xy')
+        x_test, y_test = self.data.sample(10**6, 'xy')
         results = []
         for clf_name, clf in self.classifiers.items():
             calibrator = HistogramCalibrator(n_bins=B, strategy='quantile')

@@ -73,6 +73,40 @@ class GaussianMixtureData(BaseData):
         return [data[var] for var in variables]
 
 
+class GaussianMixtureData2(BaseData):
+    def __init__(self):
+        self.n_groups = 3
+        self.params = [
+            {'loc': -3, 'scale': 2},
+            {'loc': 0, 'scale': 1},
+            {'loc': 4, 'scale': 1.5},
+        ]
+        self.weights = [0.5, 0.2, 0.3]
+        self.classes = np.array([0, 1, 1])
+        self.K = None
+
+    def sample(self, n, variables='xy'):
+        assert variables == 'xy'
+        g = np.random.choice(self.n_groups, size=n, p=self.weights)
+        x = np.zeros(n)
+        for i in range(self.n_groups):
+            idx = g == i
+            x[idx] = np.random.normal(**self.params[i], size=np.sum(idx))
+        y = np.array(self.classes)[g]
+        data = {'x': x, 'y': y}
+        return [data[var] for var in variables]
+
+    def px_given_g(self, x, g):
+        return scipy.stats.norm.pdf(x, **self.params[g])
+
+    def pg(self, g):
+        return self.weights[g]
+
+    def py_given_x(self, x):
+        joint = np.array([self.px_given_g(x, g) * self.pg(g) for g in range(self.n_groups)])
+        return np.sum(joint[self.classes == 1], axis=0) / np.sum(joint, axis=0)
+
+
 class BetaCalibrationData(BaseData):
     """Simulation 2:
     Z ~ Uniform[0, 1]
