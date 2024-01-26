@@ -14,7 +14,7 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from tqdm.auto import tqdm
 
-from calibration import OracleCalibrator, BinnedOracleCalibrator, HistogramCalibrator, PlattCalibrator, ScalingBinningCalibrator
+from calibration import OracleCalibrator, BinnedOracleCalibrator, HistogramCalibrator, PlattCalibrator, ScalingBinningCalibrator, digitize
 from utils import expectation, sci
 from bounds import CAL, SHA, RISK
 
@@ -47,6 +47,9 @@ class CalibrationSimulation:
             B_list = np.logspace(0.8, 3, 10, dtype=int)
         if i_list is None:
             i_list = np.arange(10)
+        print('Running UMB with \n n_list={}, \n B_list={}, \n i_list={}'.format(
+            n_list, B_list, i_list))
+        print('Totol number of runs:', len(n_list) * len(B_list) * len(i_list))
         prod = itertools.product(n_list, B_list, i_list)
         # results = [self.run_umb_single(*args) for args in prod]
         with Pool() as p:
@@ -119,12 +122,13 @@ class CalibrationSimulation:
             _B_list = subdf['B'].to_numpy()
             B_grid = np.linspace(_B_list[0], _B_list[-1], 100)
             plt.plot(_B_list, subdf['sha'], c=f'C{i}', label='n='+sci(n))
+            plt.fill_between(_B_list, subdf['sha_lower'], subdf['sha_upper'], color=f'C{i}', alpha=0.2)
             plt.plot(B_grid, SHA(B_grid, self.data.K), c=f'C{i}', ls='--')
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('B'); plt.ylabel('Sharpness Risk'); plt.legend(framealpha=0.4, loc='upper right')
         plt.savefig(folder / 'sha_vs_B_all_n.pdf', bbox_inches='tight')
 
-        # sha vs. B
+        # sha vs. B (largest n)
         plt.figure(figsize=figsize)
         n = n_list[-1]
         subdf = df.loc[df['n'] == n]
@@ -145,7 +149,7 @@ class CalibrationSimulation:
             subdf = df.loc[(df['n'] == n) & (df['B'] <= n / 2)]
             _B_list = subdf['B'].to_numpy()
             B_grid = np.linspace(_B_list[0], _B_list[-1], 100)
-            plt.plot(_B_list, subdf['risk'], c=f'C{i}', label=f'n={n:.1e}')
+            plt.plot(_B_list, subdf['risk'], c=f'C{i}', label='n='+sci(n))
             plt.fill_between(_B_list, subdf['risk_lower'], subdf['risk_upper'], color=f'C{i}', alpha=0.2)
             plt.plot(B_grid, RISK(B_grid, n, delta, K), c=f'C{i}', ls='--')
         plt.xscale('log'); plt.yscale('log'); plt.grid()
@@ -167,31 +171,36 @@ class CalibrationSimulation:
 
         # optimal B vs. n
         plt.figure(figsize=figsize)
-        idx_list = np.zeros(len(n_list), dtype=int)  # index of empirically optimal B in B_list
-        idx_grid = np.zeros(len(n_list), dtype=int)  # index of theoretically optimal B in B_grid
+        B_opt_emp = (df_raw
+                     .loc[df_raw.groupby(['n', 'i'])['risk'].idxmin()]
+                     .groupby('n')
+                     .quantile([0.1, 0.5, 0.9]).unstack()
+                     ['B']
+                     .rename(columns={0.1: 'lower', 0.5: 'median', 0.9: 'upper'}))
+        B_opt_emp_idx = [B_list.tolist().index(B) for B in B_opt_emp['median']]
         B_grid = np.logspace(np.log10(B_list[0]), np.log10(10 * B_list[-1]), 100)
-        for i, n in enumerate(n_list):
-            subdf = df.loc[df['n'] == n]
-            risks = subdf['risk'].to_numpy()
-            idx_list[i] = np.argmin(risks)
-
+        B_opt_theo = []  # theoretically optimal B
+        for n in n_list:
             _B_grid = B_grid[B_grid <= n / 2]
             bounds = RISK(_B_grid, n, delta, K)
-            idx_grid[i] = np.nanargmin(bounds)  # argmin returns first nan index
+            idx = np.nanargmin(bounds)  # argmin returns first nan index
+            B_opt_theo.append(_B_grid[idx])
 
         # optimal B vs. n (linear scale)
         plt.figure(figsize=figsize)
-        plt.plot(n_list, B_list[idx_list], 'x-', label='experiment')
-        plt.plot(n_list, B_grid[idx_grid], 'o--', label='theory')
+        plt.plot(n_list, B_opt_emp['median'], 'x-', label='experiment', c='C0')
+        plt.fill_between(n_list, B_opt_emp['lower'], B_opt_emp['upper'], color='C0', alpha=0.2)
+        plt.plot(n_list, B_opt_theo, 'o--', label='theory', c='C1')
         plt.xscale('log'); plt.grid()
         plt.xlabel('n'); plt.ylabel('Optimal B'); plt.legend(framealpha=0.3)
         plt.savefig(folder / 'opt_B_linear.pdf', bbox_inches='tight')
 
         # optimal B vs. n (log scale)
         plt.figure(figsize=figsize)
-        plt.plot(n_list, B_list[idx_list], 'x-', label='experiment')
-        plt.plot(n_list, B_grid[idx_grid], 'o--', label='theory')
-        plt.plot(n_list, n_list ** (1/3), ':', label='$n^{1/3}$')
+        plt.plot(n_list, B_opt_emp['median'], 'x-', label='experiment', c='C0')
+        plt.fill_between(n_list, B_opt_emp['lower'], B_opt_emp['upper'], color='C0', alpha=0.2)
+        plt.plot(n_list, B_opt_theo, 'o--', label='theory', c='C1')
+        plt.plot(n_list, n_list ** (1/3), ':', label='$n^{1/3}$', c='C2')
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('n'); plt.ylabel('Optimal B'); plt.legend(framealpha=0.3)
         plt.savefig(folder / 'opt_B_log.pdf', bbox_inches='tight')
@@ -202,7 +211,7 @@ class CalibrationSimulation:
         im = ax.imshow(np.array(risks_list), origin='lower', cmap='coolwarm', norm=colors.LogNorm())
         ax.set_xticks(np.arange(len(B_list))[::2], B_list[::2])
         ax.set_yticks(np.arange(len(n_list))[::2], [f'{n:.1e}' for n in n_list[::2]])
-        ax.scatter(idx_list, np.arange(len(n_list)), marker='o', c='k')
+        ax.scatter(B_opt_emp_idx, np.arange(len(n_list)), marker='o', c='k')
         fig.colorbar(im, label='Risk', orientation='horizontal', location='top', pad=0.03)
         plt.xlabel('B'); plt.ylabel('n')
         plt.savefig(folder / 'opt_B_risk_surface.pdf', bbox_inches='tight')
@@ -372,9 +381,11 @@ class CalibrationSimulation:
             calibrator = HistogramCalibrator(n_bins=B, strategy='quantile')
             calibrator.fit(clf.predict_proba(x_cal.reshape(-1, 1))[:, 1], y_cal)
 
-            z_pred = calibrator.predict(clf.predict_proba(x_test.reshape(-1, 1))[:, 1])
+            z_pred = clf.predict_proba(x_test.reshape(-1, 1))[:, 1]
+            z_cali = calibrator.predict(z_pred)
             z_true = self.data.py_given_x(x_test)
-            metrics = evaluate_sample(z_pred, z_true, y=y_test)
+            bin_id = digitize(z_pred, calibrator.bins)
+            metrics = evaluate_sample(z_cali, z_true, y=y_test, bin_id=bin_id)
             metrics.update({'n': n, 'B': B, 'i': i, 'classifier': clf_name})
             results.append(metrics)
         return results
@@ -431,11 +442,11 @@ def evaluate_quadrature(calibrator, py_given_z, pz):
     return results
 
 
-def evaluate_sample(z_calibrated, z_oracle, *, y=None):
+def evaluate_sample(z_pred, z_true, *, y=None, bin_id=None):
     """
     Args:
-        z_calibrated: calibrated probabilities
-        z_oracle: oracle probabilities
+        z_pred: calibrated probabilities
+        z_true: oracle probabilities
         y: true labels. If None, only calibration risk, sharpness risk, and excess risk are returned.
     Returns:
         estimates: dict of estimates, with keys:
@@ -445,16 +456,28 @@ def evaluate_sample(z_calibrated, z_oracle, *, y=None):
         - 'ref': refinement; Bayes minimum risk
         - 'bs': Brier score; mean squared error. Returned when y is not None
     """
-    df = (pd.DataFrame({'z_oracle': z_oracle, 'z_calibrated': z_calibrated})
-          .groupby('z_calibrated')['z_oracle']
+    if bin_id is None:
+        raise ValueError('bin_id must be provided')
+        # BUG: we should sort z_pred by the predicted probs by original classifier, not by histogram calibrator, which is discretized and may merge bins with many bins and small per-bin sample size. This is same bug as groupby('z_pred')
+        idx = np.argsort(z_pred)
+        z_pred = z_pred[idx]
+        z_true = z_true[idx]
+        bin_id = np.zeros(len(z_pred), dtype=int)
+        bin_id[1:] = np.cumsum(z_pred[1:] != z_pred[:-1])
+    df = (pd.DataFrame({'z_true': z_true, 'z_pred': z_pred, 'bin_id': bin_id})
+          .groupby('bin_id')[['z_pred', 'z_true']]
           .agg(['mean', np.var, 'count'])
           .reset_index())
+    z_pred_mean = df[('z_pred', 'mean')]
+    z_true_mean = df[('z_true', 'mean')]
+    z_true_var = df[('z_true', 'var')]
+    count = df[('z_pred', 'count')]
     estimates = {
-        'cal': np.average((df['z_calibrated'] - df['mean'])**2, weights=df['count']),
-        'sha': np.average(df['var'], weights=df['count']),
-        'risk': np.average((z_calibrated - z_oracle)**2),
+        'cal': np.average((z_pred_mean - z_true_mean)**2, weights=count),
+        'sha': np.average(z_true_var, weights=count),
+        'risk': np.average((z_pred - z_true)**2),
     }
     if y is not None:
-        estimates['ref'] = np.average((y - z_oracle)**2)
-        estimates['bs'] = np.average((y - z_calibrated)**2)
+        estimates['ref'] = np.average((y - z_true)**2)
+        estimates['bs'] = np.average((y - z_pred)**2)
     return estimates
