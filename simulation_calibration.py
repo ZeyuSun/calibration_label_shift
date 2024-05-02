@@ -42,7 +42,7 @@ class CalibrationSimulation:
 
     def run_umb(self, n_list=None, B_list=None, i_list=None):
         if n_list is None:
-            n_list = np.logspace(3, 7.5, 6, dtype=int)
+            n_list = np.logspace(2, 7, 7, dtype=int)
         if B_list is None:
             B_list = np.logspace(0.8, 3, 10, dtype=int)
         if i_list is None:
@@ -57,9 +57,12 @@ class CalibrationSimulation:
         df = pd.DataFrame(results)
         return df
 
-    def plot_umb(self, df_raw, folder='.'):
-        folder = Path(folder)
-        folder.mkdir(parents=False, exist_ok=True)
+    def plot_umb(self, df_raw, folder=None, **kwargs):
+        if folder:
+            folder = Path(folder)
+            folder.mkdir(parents=False, exist_ok=True)
+        figsize = kwargs.get('figsize', (2.5, 2.5))
+
         n_list = np.unique(df_raw['n'])
         n_list_for_curves = n_list[::np.ceil(len(n_list)/3).astype(int)]
         B_list = np.unique(df_raw['B'])
@@ -72,7 +75,6 @@ class CalibrationSimulation:
         df_upper = df_raw.groupby(['n', 'B']).quantile(q=1-delta)
         df = df.join(df_lower, on=['n', 'B'], rsuffix='_lower')
         df = df.join(df_upper, on=['n', 'B'], rsuffix='_upper')
-        figsize = (4, 4)
 
         # cal vs. B
         plt.figure(figsize=figsize)
@@ -93,7 +95,7 @@ class CalibrationSimulation:
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('B'); plt.ylabel('Calibration Risk'); plt.legend(framealpha=0.4, loc='upper left')
         # plt.ylim(1.1e-9, 600)
-        plt.savefig(folder / 'cal_vs_B.pdf', bbox_inches='tight')
+        if folder: plt.savefig(folder / 'cal_vs_B.pdf', bbox_inches='tight')
 
         # cal vs. n
         plt.figure(figsize=figsize)
@@ -113,7 +115,7 @@ class CalibrationSimulation:
         print('cal vs. n', np.average(slopes, weights=weights))
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('n'); plt.ylabel('Calibration Risk'); plt.legend(framealpha=0.3)
-        plt.savefig(folder / 'cal_vs_n.pdf', bbox_inches='tight')
+        if folder: plt.savefig(folder / 'cal_vs_n.pdf', bbox_inches='tight')
 
         # sha vs. B (all n)
         plt.figure(figsize=figsize)
@@ -126,7 +128,7 @@ class CalibrationSimulation:
             plt.plot(B_grid, SHA(B_grid, self.data.K), c=f'C{i}', ls='--')
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('B'); plt.ylabel('Sharpness Risk'); plt.legend(framealpha=0.4, loc='upper right')
-        plt.savefig(folder / 'sha_vs_B_all_n.pdf', bbox_inches='tight')
+        if folder: plt.savefig(folder / 'sha_vs_B_all_n.pdf', bbox_inches='tight')
 
         # sha vs. B (largest n)
         plt.figure(figsize=figsize)
@@ -141,8 +143,7 @@ class CalibrationSimulation:
         plt.plot(B_grid, SHA(B_grid, K), c='C0', ls='--', label='bound')
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('B'); plt.ylabel('Sharpness Risk'); plt.legend(framealpha=0.3)
-        plt.savefig(folder / 'sha_vs_B.pdf', bbox_inches='tight')
-
+        if folder: plt.savefig(folder / 'sha_vs_B.pdf', bbox_inches='tight')
         # risk vs. B
         plt.figure(figsize=figsize)
         for i, n in enumerate(n_list[::2]):
@@ -154,7 +155,7 @@ class CalibrationSimulation:
             plt.plot(B_grid, RISK(B_grid, n, delta, K), c=f'C{i}', ls='--')
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('B'); plt.ylabel('Risk'); plt.legend(framealpha=0.3)
-        plt.savefig(folder / 'risk_vs_B.pdf', bbox_inches='tight')
+        if folder: plt.savefig(folder / 'risk_vs_B.pdf', bbox_inches='tight')
 
         # risk vs. n
         plt.figure(figsize=figsize)
@@ -167,17 +168,22 @@ class CalibrationSimulation:
             plt.plot(n_grid, RISK(B, n_grid, delta, K), c=f'C{i}', ls='--')
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('n'); plt.ylabel('Risk'); plt.legend(framealpha=0.3)
-        plt.savefig(folder / 'risk_vs_n.pdf', bbox_inches='tight')
+        if folder: plt.savefig(folder / 'risk_vs_n.pdf', bbox_inches='tight')
 
         # optimal B vs. n
         plt.figure(figsize=figsize)
-        B_opt_emp = (df_raw
-                     .loc[df_raw.groupby(['n', 'i'])['risk'].idxmin()]
-                     .groupby('n')
-                     .quantile([0.1, 0.5, 0.9]).unstack()
-                     ['B']
-                     .rename(columns={0.1: 'lower', 0.5: 'median', 0.9: 'upper'}))
-        B_opt_emp_idx = [B_list.tolist().index(B) for B in B_opt_emp['median']]
+        def quantile(q, name):
+            def quantile_(x):
+                return x.quantile(q)
+            quantile_.__name__ = name
+            return quantile_
+        df_opt = (df_raw
+            .loc[df_raw.groupby(['n', 'i'])['risk'].idxmin()]
+            .groupby('n')
+            [['B', 'risk']]
+            .agg([quantile(delta, 'lower'), quantile(0.5, 'median'), quantile(1-delta, 'upper')])
+        )
+        B_emp_opt_idx = [np.sum(np.array(B_list) < B) for B in df_opt[('B', 'median')]]
         B_grid = np.logspace(np.log10(B_list[0]), np.log10(10 * B_list[-1]), 100)
         B_opt_theo = []  # theoretically optimal B
         for n in n_list:
@@ -188,22 +194,31 @@ class CalibrationSimulation:
 
         # optimal B vs. n (linear scale)
         plt.figure(figsize=figsize)
-        plt.plot(n_list, B_opt_emp['median'], 'x-', label='experiment', c='C0')
-        plt.fill_between(n_list, B_opt_emp['lower'], B_opt_emp['upper'], color='C0', alpha=0.2)
+        plt.plot(n_list, df_opt[('B', 'median')], 'x-', label='experiment', c='C0')
+        plt.fill_between(n_list, df_opt[('B', 'lower')], df_opt[('B', 'upper')], color='C0', alpha=0.2)
         plt.plot(n_list, B_opt_theo, 'o--', label='theory', c='C1')
         plt.xscale('log'); plt.grid()
         plt.xlabel('n'); plt.ylabel('Optimal B'); plt.legend(framealpha=0.3)
-        plt.savefig(folder / 'opt_B_linear.pdf', bbox_inches='tight')
+        if folder: plt.savefig(folder / 'opt_B_linear.pdf', bbox_inches='tight')
 
         # optimal B vs. n (log scale)
         plt.figure(figsize=figsize)
-        plt.plot(n_list, B_opt_emp['median'], 'x-', label='experiment', c='C0')
-        plt.fill_between(n_list, B_opt_emp['lower'], B_opt_emp['upper'], color='C0', alpha=0.2)
-        plt.plot(n_list, B_opt_theo, 'o--', label='theory', c='C1')
+        plt.plot(n_list, df_opt[('B', 'median')], 'o-', label='experiment', c='C0')
+        plt.fill_between(n_list, df_opt[('B', 'lower')], df_opt[('B', 'upper')], color='C0', alpha=0.2)
+        plt.plot(n_list, B_opt_theo, 's--', label='theory', c='C1')
         plt.plot(n_list, n_list ** (1/3), ':', label='$n^{1/3}$', c='C2')
         plt.xscale('log'); plt.yscale('log'); plt.grid()
         plt.xlabel('n'); plt.ylabel('Optimal B'); plt.legend(framealpha=0.3)
-        plt.savefig(folder / 'opt_B_log.pdf', bbox_inches='tight')
+        if folder: plt.savefig(folder / 'opt_B_log.pdf', bbox_inches='tight')
+
+        # optimal risk vs. n
+        plt.figure(figsize=figsize)
+        plt.plot(n_list, df_opt[('risk', 'median')], 'o-', label='experiment', c='C0')
+        plt.fill_between(n_list, df_opt[('risk', 'lower')], df_opt[('risk', 'upper')], color='C0', alpha=0.2)
+        plt.plot(n_list, n_list ** (-2/3), ':', label='$n^{-2/3}$', c='C2')
+        plt.xscale('log'); plt.yscale('log'); plt.grid()
+        plt.xlabel('n'); plt.ylabel('Risk for optimal B'); plt.legend(framealpha=0.3)
+        if folder: plt.savefig(folder / 'opt_risk_log.pdf', bbox_inches='tight')
 
         # optimal B vs. n (risk surface)
         fig, ax = plt.subplots(figsize=figsize)
@@ -211,10 +226,54 @@ class CalibrationSimulation:
         im = ax.imshow(np.array(risks_list), origin='lower', cmap='coolwarm', norm=colors.LogNorm())
         ax.set_xticks(np.arange(len(B_list))[::2], B_list[::2])
         ax.set_yticks(np.arange(len(n_list))[::2], [f'{n:.1e}' for n in n_list[::2]])
-        ax.scatter(B_opt_emp_idx, np.arange(len(n_list)), marker='o', c='k')
+        ax.scatter(B_emp_opt_idx, np.arange(len(n_list)), marker='o', c='k')
         fig.colorbar(im, label='Risk', orientation='horizontal', location='top', pad=0.03)
         plt.xlabel('B'); plt.ylabel('n')
-        plt.savefig(folder / 'opt_B_risk_surface.pdf', bbox_inches='tight')
+        if folder: plt.savefig(folder / 'opt_B_risk_surface.pdf', bbox_inches='tight')
+
+        # sha vs. cal for different n
+        fig = self.plot_umb_tradeoff(df_raw, xylog=True)
+        if folder: fig.write_html(str(folder / 'sha_vs_cal.html'))
+        fig.show()
+
+    def plot_umb_tradeoff(self, df_raw, xylog=False):
+        def error_low(x):
+            return x.quantile(0.5) - x.quantile(0.25)
+
+        def error_high(x):
+            return x.quantile(0.75) - x.quantile(0.5)
+
+        df = df_raw.groupby(['n', 'B']).agg([error_low, error_high, 'median', 'count'])
+        df.columns = df.columns.map('_'.join)
+        df = df.reset_index()
+
+        fig = px.line(
+            df,
+            x='cal_median', y='sha_median', color='n',
+            error_x_minus='cal_error_low', error_x='cal_error_high',
+            error_y_minus='sha_error_low', error_y='sha_error_high',
+            log_x=xylog, log_y=xylog,
+            labels={'cal_median': 'Calibration Risk', 'sha_median': 'Sharpness Risk'},
+        )
+
+        xmin, ymin = df['cal_median'].min(), df['sha_median'].min()
+        for level in [1e-5, 1e-4, 1e-3, 1e-2]:
+            xx = np.logspace(np.log10(xmin), np.log10(level - ymin), 100)
+            yy = level - xx
+            fig.add_traces(go.Scatter(
+                x=xx, y=yy, mode='lines',
+                line=dict(dash='dot', color='#999999'), showlegend=False
+            ))
+
+        fig.update_yaxes(
+            scaleanchor="x",
+            scaleratio=1,
+        )
+        fig.update_layout(
+            height=400,
+            width=500,
+        )
+        return fig
 
     def run_calibrators_single(self, n=1000, B=None, seed=None, plot=True):
         np.random.seed(seed)

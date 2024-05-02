@@ -1,4 +1,5 @@
 import numpy as np
+import matplotlib.pyplot as plt
 import scipy
 from utils import dlogit, logit, sigmoid
 
@@ -15,6 +16,19 @@ class BaseData:
 
     def sample(self, n, variables='zy'):
         raise NotImplementedError
+
+    def plot(self):
+        x, y = self.sample(10000)
+        xlim = [-10, 7.5]
+
+        fig, ax = plt.subplots(2, 1)
+        ax[0].hist([x[y==0], x[y==1]], histtype='step', stacked=False, bins=50)
+        xlim = ax[0].get_xlim()
+
+        xx = np.linspace(*xlim, 1000)
+        ax[1].plot(xx, self.py_given_x(xx), label='p(y=1|x)')
+        ax[1].set_xlim(xlim)
+        plt.legend()
 
 
 class GaussianMixtureData(BaseData):
